@@ -1,0 +1,10 @@
+{
+  "idf.espIdfPath": "/home/luca/esp/esp-idf",
+  "idf.toolsPath": "/home/luca/.espressif",
+  "idf.pythonBinPath": "/home/luca/.espressif/python_env/idf5.5_py3.12_env/bin/python",
+  "idf.customExtraPaths": "",
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}/build"
+  ]
+}

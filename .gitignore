@@ -1,0 +1,21 @@
+# ESP-IDF build artifacts
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# ESP-IDF component metadata cache
+.mypy_cache/
+
+# CMake / clangd
+compile_commands.json
+.cache/
+
+# VS Code (settings.json is tracked per CLAUDE.md; ignore local-only files)
+.vscode/*
+!.vscode/settings.json
+
+# Editor / OS cruft
+*.swp
+.DS_Store
