@@ -33,6 +33,7 @@
 - [x] `.gitignore` created (build/, sdkconfig, managed_components/, dependencies.lock, etc.)
 - [x] `.github/workflows/ci.yml` created per VISION.md §8 spec (build/lint/test jobs; test job will only pass once `components/aggregator/host_test` exists on Day 4)
 - [x] VS Code extensions installed via `code --install-extension`: `espressif.esp-idf-extension`, `llvm-vs-code-extensions.vscode-clangd` (cmake-tools and cpptools were already present)
+- [x] GitHub repository created (public): https://github.com/LucaAgrippino/energy-device-gateway — local branch renamed `master`→`main` per CLAUDE.md convention, initial commit pushed (CLAUDE.md, STATE.md, VISION.md, .gitignore, .vscode/settings.json, .github/workflows/ci.yml, imu_DESIGN.md)
 
 ---
 
@@ -41,7 +42,6 @@
 - [ ] Install `usbipd-win` on Windows host for USB passthrough — needs Windows-host action, not doable from WSL2
 - [ ] Add `luca` to `dialout` group (`sudo usermod -aG dialout $USER` + relogin) — needs interactive sudo, not doable from this session
 - [ ] Verify flash + monitor from WSL2 via USB passthrough — blocked on the two items above + board plugged in
-- [ ] Create GitHub repository — needs confirmation (name/visibility/account) before creating
 - [ ] Day 1: IMU component (DESIGN.md → implementation → tests)
 
 ---
@@ -96,4 +96,4 @@ None currently.
 | 2026-07-24 | Dev environment changed from Docker Dev Container to WSL2 native Ubuntu. VISION.md, CLAUDE.md, STATE.md updated. Removed `.devcontainer/` from repo structure, added `.vscode/settings.json`. |
 | 2026-07-24 | WSL2 verified, Claude Code installed. IMU decided: MPU9150 (Drotek) with Mpu6050 driver. All open decisions resolved. BOM and class hierarchy updated. IMU DESIGN.md started. |
 | 2026-07-24 | ESP-IDF v5.5 installed natively in WSL2 (esp32s3 target), dev tools (clang-tidy, clang-format, picocom, cmake, ninja) installed via apt, toolchain verified with a successful `hello_world` build. `.vscode/settings.json` created with IDF paths. Remaining env items (usbipd-win, VS Code extension install, RPi setup, flash/monitor verification) need Windows-host or hardware action. |
-| 2026-07-24 | Confirmed VISION.md already reflects WSL2-native decision (no edit needed). Completed remaining WSL2-side environment items: pymodbus installed, `.gitignore` and `.github/workflows/ci.yml` created, ESP-IDF + clangd VS Code extensions installed via `code --install-extension`. Still blocked on user/hardware action: dialout group membership, usbipd-win, flash/monitor verification, Raspberry Pi setup, GitHub repo creation. |
+| 2026-07-24 | Confirmed VISION.md already reflects WSL2-native decision (no edit needed). Completed remaining WSL2-side environment items: pymodbus installed, `.gitignore` and `.github/workflows/ci.yml` created, ESP-IDF + clangd VS Code extensions installed via `code --install-extension`. Created public GitHub repo, renamed branch to `main`, pushed initial commit. CI workflow triggers automatically but will fail until Day 1 firmware skeleton (CMakeLists.txt, main/, components/) exists — expected, not a setup bug. Still blocked on user/hardware action: dialout group membership, usbipd-win, flash/monitor verification, Raspberry Pi setup. |
