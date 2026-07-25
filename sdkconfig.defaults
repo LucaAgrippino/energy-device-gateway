@@ -1,0 +1,9 @@
+# sdkconfig.defaults — tracked in git per CLAUDE.md (sdkconfig itself is gitignored).
+# Populated incrementally as each component's Kconfig requirements are identified.
+# Day 1 (IMU + common types): no component-specific options needed yet.
+
+# ESP32-S3-DevKitC ships with a 16MB flash chip; the ESP-IDF default (2MB) mismatches
+# the actual hardware (boot log: "Detected size(16384k) larger than the size in the
+# binary image header(2048k)").
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
