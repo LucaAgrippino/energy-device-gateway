@@ -153,12 +153,19 @@ usbipd list
 usbipd bind --busid <BUSID>
 ```
 
-**Every session (PowerShell as Administrator):**
+**Every session (PowerShell, NOT Administrator):**
 
 ```powershell
 # Attach the device to WSL2 (must be done after each plug-in or reboot)
 usbipd attach --wsl --busid <BUSID>
 ```
+
+> **Important:** `bind` requires an elevated (Administrator) PowerShell, but `attach --wsl`
+> must be run from a regular, non-elevated PowerShell as the same Windows user who
+> installed WSL — running `attach` elevated resolves to a different user context that
+> can't see the registered WSL distro, producing a misleading
+> `"There are no WSL distributions installed"` error even though `wsl --list --verbose`
+> shows it fine. See [usbipd-win#1008](https://github.com/dorssel/usbipd-win/issues/1008).
 
 **Verify inside WSL2 Ubuntu:**
 

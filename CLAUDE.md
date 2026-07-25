@@ -27,8 +27,8 @@ See `VISION.md` for full details. Key points:
   `wifi_manager`, `health`, `common`.
 - **Data flow:** Sensor tasks → `xQueueOverwrite` (mailbox) → `AggregatorTask` →
   `std::condition_variable` → `PublisherTask` → WebSocket.
-- **Class hierarchy:** `IImu` ← `Mpu6050`, `Mpu9250`. `IModbusDevice` ← `ModbusRtuDevice`,
-  `ModbusTcpDevice`.
+- **Class hierarchy:** `IImu` ← `Mpu9150` (MPU6050-register-compatible). `IModbusDevice` ←
+  `ModbusRtuDevice`, `ModbusTcpDevice`.
 - **Concurrency split:** FreeRTOS primitives (`xQueueOverwrite`) for sensor→aggregator
   path (scheduler-integrated blocking with timeout, mailbox semantics). C++
   `std::mutex`/`std::condition_variable` for aggregator→publisher path (demonstrates
