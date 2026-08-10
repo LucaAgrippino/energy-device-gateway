@@ -1,12 +1,82 @@
+# Check selection is deliberately curated rather than "every family, minus
+# exceptions". Blanket cppcoreguidelines-* fights ESP-IDF at every turn: ESP_LOGx
+# is a printf-style vararg macro wrapped in do/while, IDF config structs expose
+# unions, and driver APIs hand back fixed-size C arrays. Enabling the family
+# wholesale produced hundreds of findings that could only ever be suppressed, so
+# the few genuinely useful checks from it are listed individually instead.
 Checks: >
   bugprone-*,
-  cppcoreguidelines-*,
   modernize-*,
   performance-*,
   readability-*,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-prefer-member-initializer,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-virtual-class-destructor,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-invalid-enum-default-initialization,
+  -modernize-avoid-c-arrays,
   -modernize-use-trailing-return-type,
-  -cppcoreguidelines-avoid-magic-numbers,
+  -modernize-use-scoped-lock,
+  -modernize-use-integer-sign-comparison,
+  -performance-enum-size,
   -readability-magic-numbers,
-  -cppcoreguidelines-pro-bounds-pointer-arithmetic
+  -readability-identifier-length,
+  -readability-function-cognitive-complexity,
+  -readability-braces-around-statements,
+  -readability-uppercase-literal-suffix,
+  -readability-implicit-bool-conversion,
+  -readability-convert-member-functions-to-static,
+  -readability-avoid-unconditional-preprocessor-if,
+  -readability-use-concise-preprocessor-directives
+
+# Rationale for the checks left out or switched off:
+#
+# bugprone-easily-swappable-parameters
+#   Hardware constructors legitimately take several same-typed arguments
+#   (tx_pin, rx_pin, de_re_pin). The alternative is wrapper types that buy
+#   nothing on a driver whose call site is a single line in app_main.
+# bugprone-invalid-enum-default-initialization
+#   `uart_config_t cfg{}` zero-initialises enums that have no 0 enumerator.
+#   Every field this project cares about is assigned immediately afterwards,
+#   and value-initialising IDF structs is the idiom used throughout.
+# modernize-use-scoped-lock
+#   CLAUDE.md calls for std::mutex/std::lock_guard/std::condition_variable
+#   specifically; rewriting to std::scoped_lock would undercut that.
+# modernize-avoid-c-arrays
+#   Cannot be satisfied. Modbus and I2C frame buffers are fixed-size byte
+#   arrays by nature, and WsPublisher's embedded dashboard is reached through
+#   linker-provided `extern const uint8_t _binary_..._start[]` symbols, which
+#   have no std::array spelling at all.
+# cppcoreguidelines-pro-type-member-init
+#   Reading, Snapshot, RegisterDef and MailboxEntry are deliberately aggregates,
+#   populated at their construction sites. Reading in particular is documented
+#   as POD so it can travel through xQueueOverwrite by memcpy.
+# modernize-use-integer-sign-comparison
+#   Wants std::cmp_* around comparisons of uart_read_bytes' int return against
+#   sizes. The explicit static_cast already present states the intent more
+#   plainly in driver code.
+# performance-enum-size
+#   Would shrink Reading::Status to a uint8_t base and change the layout of a
+#   struct that is memcpy'd through FreeRTOS queues and already validated on
+#   hardware. Not worth the churn for one byte.
+# readability-uppercase-literal-suffix
+#   The codebase and the design documents consistently write 0.1f, not 0.1F.
+# readability-identifier-length
+#   Rejects idiomatic short names in tight numeric code (i, p, rr).
+# readability-function-cognitive-complexity
+#   Scores are inflated by ESP-IDF macro expansion rather than by the code
+#   actually written here.
+# readability-braces-around-statements, readability-implicit-bool-conversion,
+# readability-convert-member-functions-to-static,
+# readability-avoid-unconditional-preprocessor-if,
+# readability-use-concise-preprocessor-directives
+#   Fire almost entirely inside expanded IDF macros.
+
 WarningsAsErrors: '*'
-HeaderFilterRegex: '(components|main)/.*'
+
+# Anchored on the repository directory name. The previous value,
+# '(components|main)/.*', also matched ESP-IDF's own components/ directory, so
+# clang-tidy linted the entire SDK — that alone accounted for roughly 90% of the
+# findings this configuration used to report.
+HeaderFilterRegex: 'energy-device-gateway/(components|main)/.*'
