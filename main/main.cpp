@@ -5,6 +5,8 @@
 #include "ImuTask.hpp"
 #include "ModbusRtuDevice.hpp"
 #include "ModbusRtuTask.hpp"
+#include "ModbusTcpDevice.hpp"
+#include "ModbusTcpTask.hpp"
 #include "Mpu9150.hpp"
 #include "Reading.hpp"
 #include "WifiManager.hpp"
@@ -38,6 +40,10 @@ constexpr UBaseType_t kAggregatorTaskPriority = 3;
 constexpr uint32_t kModbusRtuTaskStackBytes = 4096;
 constexpr UBaseType_t kModbusRtuTaskPriority = 4;
 
+// modbus_device DESIGN_TCP.md §6 "Task Parameters".
+constexpr uint32_t kModbusTcpTaskStackBytes = 4096;
+constexpr UBaseType_t kModbusTcpTaskPriority = 4;
+
 // Both publisher and aggregator DESIGN.md task tables specify "Core 1 — keep
 // off core 0 (Wi-Fi)"; plain xTaskCreate doesn't pin, so both use
 // xTaskCreatePinnedToCore instead.
@@ -50,6 +56,8 @@ std::unique_ptr<WsPublisher> g_publisher;
 std::unique_ptr<Aggregator> g_aggregator;
 std::unique_ptr<ModbusRtuDevice> g_modbus_rtu;
 ModbusRtuTaskContext g_modbus_rtu_ctx;
+std::unique_ptr<ModbusTcpDevice> g_modbus_tcp;
+ModbusTcpTaskContext g_modbus_tcp_ctx;
 
 // modbus_device DESIGN.md §6, using the simulated-inverter map from
 // VISION.md §7.2. Names are fully qualified ("modbus_rtu.voltage") to match the
@@ -62,6 +70,16 @@ const std::vector<RegisterDef> kInverterRegisters = {
     // Registers 3-4 hold one uint32, big-endian, ×0.1 → kWh.
     {.address = 3, .name = "modbus_rtu.energy_total", .scale = 0.1f, .reg_count = 2},
     {.address = 5, .name = "modbus_rtu.status", .scale = 1.0f, .reg_count = 1},
+};
+
+// Same simulated inverter, reached over Wi-Fi instead of RS-485, so the map is
+// identical apart from the source prefix the dashboard keys off.
+const std::vector<RegisterDef> kInverterRegistersTcp = {
+    {.address = 0, .name = "modbus_tcp.voltage", .scale = 0.1f, .reg_count = 1},
+    {.address = 1, .name = "modbus_tcp.current", .scale = 0.01f, .reg_count = 1},
+    {.address = 2, .name = "modbus_tcp.power", .scale = 1.0f, .reg_count = 1},
+    {.address = 3, .name = "modbus_tcp.energy_total", .scale = 0.1f, .reg_count = 2},
+    {.address = 5, .name = "modbus_tcp.status", .scale = 1.0f, .reg_count = 1},
 };
 
 void publisherTaskFn(void* param) {
@@ -152,9 +170,25 @@ extern "C" void app_main(void) {
                  esp_err_to_name(rtu_err));
     }
 
-    // Modbus TCP has no producer task yet (Day 6, DESIGN_TCP.md), so this
-    // mailbox stays empty and reports Status::TIMEOUT.
-    QueueHandle_t tcp_mailbox = xQueueCreate(1, sizeof(Reading));
+    // One mailbox per TCP register, same fan-out as RTU.
+    for (size_t i = 0; i < kInverterRegistersTcp.size(); i++) {
+        g_modbus_tcp_ctx.mailboxes.push_back(xQueueCreate(1, sizeof(Reading)));
+    }
+
+    g_modbus_tcp = std::make_unique<ModbusTcpDevice>(
+        CONFIG_MODBUS_TCP_IP,
+        static_cast<uint16_t>(CONFIG_MODBUS_TCP_PORT),
+        static_cast<uint8_t>(CONFIG_MODBUS_TCP_UNIT_ID),
+        kInverterRegistersTcp);
+
+    // The task blocks on the Wi-Fi event group before touching a socket, so it
+    // is safe to start here even though the station may not be up yet.
+    g_modbus_tcp_ctx.device = g_modbus_tcp.get();
+    g_modbus_tcp_ctx.wifi_event_group = g_wifi->eventGroup();
+    g_modbus_tcp_ctx.connected_bit = WifiManager::CONNECTED_BIT;
+    xTaskCreatePinnedToCore(modbusTcpTask, "modbus_tcp_task", kModbusTcpTaskStackBytes,
+                            &g_modbus_tcp_ctx, kModbusTcpTaskPriority, nullptr,
+                            kSensorPipelineCore);
 
     g_publisher = std::make_unique<WsPublisher>();
     esp_err_t publisher_err = g_publisher->start();
@@ -175,9 +209,6 @@ extern "C" void app_main(void) {
         {.queue = g_imu_ctx.gyro_y_mailbox, .name = "imu.gyro_y", .timeout_us = kImuStaleUs},
         {.queue = g_imu_ctx.gyro_z_mailbox, .name = "imu.gyro_z", .timeout_us = kImuStaleUs},
         {.queue = g_imu_ctx.temp_mailbox, .name = "imu.temp", .timeout_us = kImuStaleUs},
-        {.queue = tcp_mailbox,
-         .name = "modbus_tcp",
-         .timeout_us = CONFIG_MODBUS_TCP_STALE_TIMEOUT_MS * 1000LL},
     };
 
     // Append one aggregator entry per RTU register, keeping the mailbox order
@@ -186,6 +217,11 @@ extern "C" void app_main(void) {
         mailboxes.push_back({.queue = g_modbus_rtu_ctx.mailboxes[i],
                              .name = kInverterRegisters[i].name,
                              .timeout_us = CONFIG_MODBUS_RTU_STALE_TIMEOUT_MS * 1000LL});
+    }
+    for (size_t i = 0; i < kInverterRegistersTcp.size(); i++) {
+        mailboxes.push_back({.queue = g_modbus_tcp_ctx.mailboxes[i],
+                             .name = kInverterRegistersTcp[i].name,
+                             .timeout_us = CONFIG_MODBUS_TCP_STALE_TIMEOUT_MS * 1000LL});
     }
 
     g_aggregator = std::make_unique<Aggregator>(std::move(mailboxes), *g_publisher);
