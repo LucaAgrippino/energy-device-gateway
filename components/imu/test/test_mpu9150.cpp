@@ -1,0 +1,63 @@
+#include "Mpu9150.hpp"
+#include "driver/i2c_master.h"
+#include "unity.h"
+
+namespace {
+constexpr gpio_num_t kSdaPin = GPIO_NUM_1;
+constexpr gpio_num_t kSclPin = GPIO_NUM_2;
+constexpr uint8_t kImuAddr = 0x69;
+
+i2c_master_bus_handle_t openTestBus() {
+    i2c_master_bus_config_t bus_cfg{};
+    bus_cfg.i2c_port = I2C_NUM_0;
+    bus_cfg.sda_io_num = kSdaPin;
+    bus_cfg.scl_io_num = kSclPin;
+    bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus_cfg.glitch_ignore_cnt = 7;
+
+    i2c_master_bus_handle_t bus;
+    TEST_ESP_OK(i2c_new_master_bus(&bus_cfg, &bus));
+    return bus;
+}
+}  // namespace
+
+// The tests below marked [hw] require a Drotek MPU9150 wired to I2C0
+// (SDA=GPIO1, SCL=GPIO2, DESIGN.md §2). Run via the ESP-IDF unit-test-app,
+// on-target.
+
+TEST_CASE("MPU9150 init wakes device and passes WHO_AM_I probe", "[imu][hw]") {
+    i2c_master_bus_handle_t bus = openTestBus();
+    {
+        Mpu9150 imu(bus, kImuAddr);
+        TEST_ESP_OK(imu.init());
+    }  // destructor removes the device here, before the bus is deleted
+    TEST_ESP_OK(i2c_del_master_bus(bus));
+}
+
+TEST_CASE("MPU9150 burst read reports ~1g on the stationary Z axis", "[imu][hw]") {
+    i2c_master_bus_handle_t bus = openTestBus();
+    ImuReading reading;
+    {
+        Mpu9150 imu(bus, kImuAddr);
+        TEST_ESP_OK(imu.init());
+        reading = imu.read();
+    }  // destructor removes the device here, before the bus is deleted
+    TEST_ESP_OK(i2c_del_master_bus(bus));
+
+    TEST_ASSERT_FLOAT_WITHIN(2.0f, 9.80665f, reading.accel_z);
+}
+
+TEST_CASE("MPU9150 RAII: construct/destroy releases the I2C device cleanly", "[imu][hw]") {
+    i2c_master_bus_handle_t bus = openTestBus();
+    {
+        Mpu9150 imu(bus, kImuAddr);
+        TEST_ESP_OK(imu.init());
+    }  // destructor removes the device here
+    TEST_ESP_OK(i2c_del_master_bus(bus));
+}
+
+TEST_CASE("MPU9150 scaling: known raw values map to expected physical units", "[imu]") {
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 9.80665f, Mpu9150::scaleAccel(16384));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.0f, Mpu9150::scaleGyro(131));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 36.53f, Mpu9150::scaleTemp(0));
+}
