@@ -31,11 +31,10 @@ public:
     std::vector<Reading> readRegisters() override;
     [[nodiscard]] std::string_view name() const override { return "modbus_rtu"; }
 
-    // Pure helpers, static and public so the unit tests can exercise them
-    // without any UART hardware — same approach as Mpu9150's scale* methods.
+    // Static and public so the unit tests can exercise it without any UART
+    // hardware — same approach as Mpu9150's scale* methods. The value scaling
+    // lives in ModbusScaling.hpp, shared with the TCP transport.
     static uint16_t crc16(const uint8_t* data, size_t len);
-    static float    scaleValue(uint16_t raw, float scale);
-    static float    scaleValue32(uint16_t high, uint16_t low, float scale);
 
 private:
     // Sends one request and validates the reply: slave address, function code,

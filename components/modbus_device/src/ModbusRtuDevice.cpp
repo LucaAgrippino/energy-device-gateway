@@ -1,5 +1,7 @@
 #include "ModbusRtuDevice.hpp"
 
+#include "ModbusScaling.hpp"
+
 #include <algorithm>
 #include <cinttypes>
 #include <utility>
@@ -153,8 +155,9 @@ std::vector<Reading> ModbusRtuDevice::readRegisters() {
 
         const float value =
             (reg.reg_count == 1)
-                ? scaleValue(beU16(data + offset), reg.scale)
-                : scaleValue32(beU16(data + offset), beU16(data + offset + 2), reg.scale);
+                ? modbus::scaleValue(beU16(data + offset), reg.scale)
+                : modbus::scaleValue32(beU16(data + offset),
+                                       beU16(data + offset + 2), reg.scale);
 
         readings.emplace_back(reg.name, value, now, Reading::Status::OK);
     }
@@ -281,11 +284,4 @@ uint16_t ModbusRtuDevice::crc16(const uint8_t* data, size_t len) {
     return crc;
 }
 
-float ModbusRtuDevice::scaleValue(uint16_t raw, float scale) {
-    return static_cast<float>(raw) * scale;
-}
 
-float ModbusRtuDevice::scaleValue32(uint16_t high, uint16_t low, float scale) {
-    const uint32_t raw = (static_cast<uint32_t>(high) << 16) | low;
-    return static_cast<float>(raw) * scale;
-}
