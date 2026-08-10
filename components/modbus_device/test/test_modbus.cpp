@@ -1,6 +1,8 @@
 #include <cstdint>
 
 #include "ModbusRtuDevice.hpp"
+#include "ModbusScaling.hpp"
+#include "ModbusTcpDevice.hpp"
 #include "unity.h"
 
 namespace {
@@ -56,18 +58,58 @@ TEST_CASE("crc16 validates the response frame from the register map", "[modbus]"
 
 TEST_CASE("scaleValue applies the register map scaling", "[modbus]") {
     // VISION.md §7.2: voltage x0.1, current x0.01, power x1.
-    TEST_ASSERT_FLOAT_WITHIN(0.001f, 400.0f, ModbusRtuDevice::scaleValue(4000, 0.1f));
-    TEST_ASSERT_FLOAT_WITHIN(0.001f, 8.5f, ModbusRtuDevice::scaleValue(850, 0.01f));
-    TEST_ASSERT_FLOAT_WITHIN(0.001f, 3298.0f, ModbusRtuDevice::scaleValue(3298, 1.0f));
-    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, ModbusRtuDevice::scaleValue(0, 0.1f));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 400.0f, modbus::scaleValue(4000, 0.1f));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 8.5f, modbus::scaleValue(850, 0.01f));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 3298.0f, modbus::scaleValue(3298, 1.0f));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, modbus::scaleValue(0, 0.1f));
 }
 
 TEST_CASE("scaleValue32 combines two registers big-endian", "[modbus]") {
     // Energy total lives in registers 3-4, high word first, x0.1 -> kWh.
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 1234.5f, ModbusRtuDevice::scaleValue32(0, 12345, 0.1f));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 1234.5f, modbus::scaleValue32(0, 12345, 0.1f));
     // High word set: 0x0001_0000 = 65536 raw -> 6553.6 kWh.
-    TEST_ASSERT_FLOAT_WITHIN(0.1f, 6553.6f, ModbusRtuDevice::scaleValue32(1, 0, 0.1f));
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 6553.6f, modbus::scaleValue32(1, 0, 0.1f));
     // Full scale must not overflow into a negative via signed arithmetic.
     TEST_ASSERT_FLOAT_WITHIN(1.0f, 429496729.5f,
-                             ModbusRtuDevice::scaleValue32(0xFFFF, 0xFFFF, 0.1f));
+                             modbus::scaleValue32(0xFFFF, 0xFFFF, 0.1f));
+}
+
+TEST_CASE("buildRequest lays out the MBAP header and PDU", "[modbus]") {
+    // "Transaction 1, unit 1, read 6 holding registers from 0" — the worked
+    // example in DESIGN_TCP.md §2.
+    uint8_t frame[12] = {};
+    ModbusTcpDevice::buildRequest(frame, 0x0001, 0x01, 0x03, 0, 6);
+
+    const uint8_t expected[] = {0x00, 0x01,   // transaction id
+                                0x00, 0x00,   // protocol id, always zero
+                                0x00, 0x06,   // length: unit + func + 4 payload
+                                0x01,         // unit id
+                                0x03,         // function
+                                0x00, 0x00,   // start register
+                                0x00, 0x06};  // register count
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, frame, sizeof(expected));
+}
+
+TEST_CASE("buildRequest carries the transaction id big-endian", "[modbus]") {
+    uint8_t frame[12] = {};
+    ModbusTcpDevice::buildRequest(frame, 0xBEEF, 0x11, 0x03, 0x0102, 0x0304);
+
+    TEST_ASSERT_EQUAL_HEX8(0xBE, frame[0]);
+    TEST_ASSERT_EQUAL_HEX8(0xEF, frame[1]);
+    TEST_ASSERT_EQUAL_HEX8(0x11, frame[6]);
+    TEST_ASSERT_EQUAL_HEX8(0x01, frame[8]);
+    TEST_ASSERT_EQUAL_HEX8(0x02, frame[9]);
+    TEST_ASSERT_EQUAL_HEX8(0x03, frame[10]);
+    TEST_ASSERT_EQUAL_HEX8(0x04, frame[11]);
+}
+
+TEST_CASE("MBAP length field stays fixed for a read request", "[modbus]") {
+    // The length counts the unit id plus the PDU, which is always six bytes for
+    // function 0x03 regardless of how many registers are asked for.
+    for (uint16_t count : {uint16_t{1}, uint16_t{6}, uint16_t{125}}) {
+        uint8_t frame[12] = {};
+        ModbusTcpDevice::buildRequest(frame, 7, 1, 0x03, 0, count);
+        TEST_ASSERT_EQUAL_HEX8(0x00, frame[4]);
+        TEST_ASSERT_EQUAL_HEX8(0x06, frame[5]);
+    }
 }

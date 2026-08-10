@@ -44,3 +44,42 @@ menu "Modbus RTU Configuration"
             leaves ample room for slave turnaround.
 
 endmenu
+
+menu "Modbus TCP Configuration"
+
+    config MODBUS_TCP_IP
+        string "Slave IPv4 address"
+        default "192.168.1.100"
+        help
+            Address of the pymodbus TCP slave (tools/pymodbus_slave/tcp_slave.py).
+            The Raspberry Pi must be on the same network as the ESP32's station
+            interface, so this is a LAN address, not the 192.168.4.x AP subnet.
+
+    config MODBUS_TCP_PORT
+        int "Slave TCP port"
+        default 5020
+        range 1 65535
+        help
+            502 is the registered Modbus port but is privileged, so the slave
+            would need root. 5020 lets the Pi run it as a normal user; both ends
+            just have to agree.
+
+    config MODBUS_TCP_UNIT_ID
+        int "Unit ID (slave address in the MBAP header)"
+        default 1
+        range 1 247
+
+    config MODBUS_TCP_POLL_MS
+        int "Poll period (ms)"
+        default 2000
+        range 200 60000
+
+    config MODBUS_TCP_TIMEOUT_MS
+        int "Socket send/receive timeout (ms)"
+        default 2000
+        range 100 10000
+        help
+            Bounds both directions. Without a send timeout, a dead peer with a
+            full transmit window would block the poll task indefinitely.
+
+endmenu
