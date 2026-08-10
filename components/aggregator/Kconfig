@@ -1,0 +1,20 @@
+menu "Aggregator Configuration"
+
+    config AGGREGATOR_PERIOD_MS
+        int "Aggregation period (ms)"
+        default 500
+        range 100 5000
+
+    config IMU_STALE_TIMEOUT_MS
+        int "IMU stale timeout (ms)"
+        default 500
+
+    config MODBUS_RTU_STALE_TIMEOUT_MS
+        int "Modbus RTU stale timeout (ms)"
+        default 3000
+
+    config MODBUS_TCP_STALE_TIMEOUT_MS
+        int "Modbus TCP stale timeout (ms)"
+        default 5000
+
+endmenu
