@@ -1,0 +1,6 @@
+# pymodbus 3.9 renamed ModbusSlaveContext -> ModbusDeviceContext and reduced it
+# to a write-once shim with no setValues(), which makes a live-updating slave
+# impossible through any public API. Pinned to the 3.8 line, which is also what
+# Debian trixie packages as python3-pymodbus.
+pymodbus~=3.8.0
+pyserial>=3.5

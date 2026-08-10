@@ -3,6 +3,8 @@
 
 #include "Aggregator.hpp"
 #include "ImuTask.hpp"
+#include "ModbusRtuDevice.hpp"
+#include "ModbusRtuTask.hpp"
 #include "Mpu9150.hpp"
 #include "Reading.hpp"
 #include "WifiManager.hpp"
@@ -32,6 +34,10 @@ constexpr UBaseType_t kPublisherTaskPriority = 2;
 constexpr uint32_t kAggregatorTaskStackBytes = 4096;
 constexpr UBaseType_t kAggregatorTaskPriority = 3;
 
+// modbus_device DESIGN.md §10 "Task Parameters".
+constexpr uint32_t kModbusRtuTaskStackBytes = 4096;
+constexpr UBaseType_t kModbusRtuTaskPriority = 4;
+
 // Both publisher and aggregator DESIGN.md task tables specify "Core 1 — keep
 // off core 0 (Wi-Fi)"; plain xTaskCreate doesn't pin, so both use
 // xTaskCreatePinnedToCore instead.
@@ -42,6 +48,21 @@ ImuTaskContext g_imu_ctx;
 std::unique_ptr<WifiManager> g_wifi;
 std::unique_ptr<WsPublisher> g_publisher;
 std::unique_ptr<Aggregator> g_aggregator;
+std::unique_ptr<ModbusRtuDevice> g_modbus_rtu;
+ModbusRtuTaskContext g_modbus_rtu_ctx;
+
+// modbus_device DESIGN.md §6, using the simulated-inverter map from
+// VISION.md §7.2. Names are fully qualified ("modbus_rtu.voltage") to match the
+// source-naming convention documented in Reading.hpp, which the dashboard and
+// the aggregator's MailboxEntry list both key off.
+const std::vector<RegisterDef> kInverterRegisters = {
+    {.address = 0, .name = "modbus_rtu.voltage", .scale = 0.1f, .reg_count = 1},
+    {.address = 1, .name = "modbus_rtu.current", .scale = 0.01f, .reg_count = 1},
+    {.address = 2, .name = "modbus_rtu.power", .scale = 1.0f, .reg_count = 1},
+    // Registers 3-4 hold one uint32, big-endian, ×0.1 → kWh.
+    {.address = 3, .name = "modbus_rtu.energy_total", .scale = 0.1f, .reg_count = 2},
+    {.address = 5, .name = "modbus_rtu.status", .scale = 1.0f, .reg_count = 1},
+};
 
 void publisherTaskFn(void* param) {
     static_cast<WsPublisher*>(param)->run();
@@ -99,11 +120,40 @@ extern "C" void app_main(void) {
 
     xTaskCreate(imuTask, "imu_task", kImuTaskStackBytes, &g_imu_ctx, kImuTaskPriority, nullptr);
 
-    // Modbus RTU/TCP mailboxes: no producer task exists yet (modbus_device,
-    // modbus_tcp aren't built), so these stay empty. That's a normal,
-    // documented state per aggregator DESIGN.md §7 — an empty mailbox reports
-    // Status::TIMEOUT rather than blocking or erroring.
-    QueueHandle_t rtu_mailbox = xQueueCreate(1, sizeof(Reading));
+    // One mailbox per RTU register, in register-map order (modbus_device
+    // DESIGN.md §10, fanned out the same way as the IMU rather than shipping a
+    // std::vector through a queue).
+    for (size_t i = 0; i < kInverterRegisters.size(); i++) {
+        g_modbus_rtu_ctx.mailboxes.push_back(xQueueCreate(1, sizeof(Reading)));
+    }
+
+    g_modbus_rtu = std::make_unique<ModbusRtuDevice>(
+        static_cast<uart_port_t>(CONFIG_MODBUS_RTU_UART_PORT),
+        static_cast<uint8_t>(CONFIG_MODBUS_RTU_SLAVE_ADDR),
+        static_cast<uint32_t>(CONFIG_MODBUS_RTU_BAUD_RATE),
+        static_cast<gpio_num_t>(CONFIG_MODBUS_RTU_TX_PIN),
+        static_cast<gpio_num_t>(CONFIG_MODBUS_RTU_RX_PIN),
+        static_cast<gpio_num_t>(CONFIG_MODBUS_RTU_DE_RE_PIN),
+        kInverterRegisters);
+
+    // DESIGN.md §12 calls a UART init failure fatal. It is handled here the way
+    // Wi-Fi and the publisher already are instead: log it and carry on, so a
+    // missing RS-485 adapter degrades to Status::TIMEOUT on those registers
+    // (aggregator DESIGN.md §7) rather than reboot-looping the whole gateway
+    // and taking the working IMU pipeline down with it.
+    esp_err_t rtu_err = g_modbus_rtu->init();
+    if (rtu_err == ESP_OK) {
+        g_modbus_rtu_ctx.device = g_modbus_rtu.get();
+        xTaskCreatePinnedToCore(modbusRtuTask, "modbus_rtu_task", kModbusRtuTaskStackBytes,
+                                &g_modbus_rtu_ctx, kModbusRtuTaskPriority, nullptr,
+                                kSensorPipelineCore);
+    } else {
+        ESP_LOGE(kTag, "Modbus RTU init failed: %s — those registers stay stale",
+                 esp_err_to_name(rtu_err));
+    }
+
+    // Modbus TCP has no producer task yet (Day 6, DESIGN_TCP.md), so this
+    // mailbox stays empty and reports Status::TIMEOUT.
     QueueHandle_t tcp_mailbox = xQueueCreate(1, sizeof(Reading));
 
     g_publisher = std::make_unique<WsPublisher>();
@@ -125,13 +175,18 @@ extern "C" void app_main(void) {
         {.queue = g_imu_ctx.gyro_y_mailbox, .name = "imu.gyro_y", .timeout_us = kImuStaleUs},
         {.queue = g_imu_ctx.gyro_z_mailbox, .name = "imu.gyro_z", .timeout_us = kImuStaleUs},
         {.queue = g_imu_ctx.temp_mailbox, .name = "imu.temp", .timeout_us = kImuStaleUs},
-        {.queue = rtu_mailbox,
-         .name = "modbus_rtu",
-         .timeout_us = CONFIG_MODBUS_RTU_STALE_TIMEOUT_MS * 1000LL},
         {.queue = tcp_mailbox,
          .name = "modbus_tcp",
          .timeout_us = CONFIG_MODBUS_TCP_STALE_TIMEOUT_MS * 1000LL},
     };
+
+    // Append one aggregator entry per RTU register, keeping the mailbox order
+    // and the register-map order aligned.
+    for (size_t i = 0; i < kInverterRegisters.size(); i++) {
+        mailboxes.push_back({.queue = g_modbus_rtu_ctx.mailboxes[i],
+                             .name = kInverterRegisters[i].name,
+                             .timeout_us = CONFIG_MODBUS_RTU_STALE_TIMEOUT_MS * 1000LL});
+    }
 
     g_aggregator = std::make_unique<Aggregator>(std::move(mailboxes), *g_publisher);
     xTaskCreatePinnedToCore(aggregatorTaskFn, "aggregator_task", kAggregatorTaskStackBytes,
