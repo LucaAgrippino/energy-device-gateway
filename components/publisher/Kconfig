@@ -1,0 +1,12 @@
+menu "Publisher Configuration"
+
+    config WS_MAX_CLIENTS
+        int "Max WebSocket clients"
+        default 4
+        range 1 8
+
+    config WS_SERVER_PORT
+        int "HTTP server port"
+        default 80
+
+endmenu

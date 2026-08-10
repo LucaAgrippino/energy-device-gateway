@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>energy-device-gateway dashboard</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; background: #111; color: #eee; }
+  h1 { font-size: 1.2rem; }
+  #status { font-size: 0.85rem; margin-bottom: 1rem; }
+  #status.connected { color: #6f6; }
+  #status.disconnected { color: #f66; }
+  table { border-collapse: collapse; width: 100%; max-width: 640px; }
+  th, td { text-align: left; padding: 0.4rem 0.8rem; border-bottom: 1px solid #333; }
+  th { color: #999; font-weight: normal; font-size: 0.8rem; text-transform: uppercase; }
+  .st-0 { color: #6f6; }
+  .st-1 { color: #fc6; }
+  .st-2 { color: #f66; }
+</style>
+</head>
+<body>
+<h1>energy-device-gateway</h1>
+<div id="status" class="disconnected">disconnected</div>
+<table>
+  <thead><tr><th>Source</th><th>Value</th><th>Status</th></tr></thead>
+  <tbody id="readings"></tbody>
+</table>
+
+<script>
+const STATUS_LABEL = ["OK", "TIMEOUT", "ERROR"];
+const statusEl = document.getElementById("status");
+const readingsEl = document.getElementById("readings");
+const RECONNECT_DELAY_MS = 1000;
+
+function render(snapshot) {
+  readingsEl.innerHTML = "";
+  for (const r of snapshot.readings) {
+    const row = document.createElement("tr");
+    const st = STATUS_LABEL[r.st] ?? r.st;
+    row.innerHTML =
+      "<td>" + r.src + "</td>" +
+      "<td>" + r.val.toFixed(3) + "</td>" +
+      "<td class=\"st-" + r.st + "\">" + st + "</td>";
+    readingsEl.appendChild(row);
+  }
+}
+
+function connect() {
+  const ws = new WebSocket("ws://" + location.host + "/ws");
+
+  ws.onopen = () => {
+    statusEl.textContent = "connected";
+    statusEl.className = "connected";
+  };
+
+  ws.onclose = () => {
+    statusEl.textContent = "disconnected — retrying";
+    statusEl.className = "disconnected";
+    setTimeout(connect, RECONNECT_DELAY_MS);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (event) => {
+    try {
+      render(JSON.parse(event.data));
+    } catch (e) {
+      console.error("bad snapshot frame", e);
+    }
+  };
+}
+
+connect();
+</script>
+</body>
+</html>
