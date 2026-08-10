@@ -1,0 +1,46 @@
+menu "Modbus RTU Configuration"
+
+    config MODBUS_RTU_UART_PORT
+        int "UART port number"
+        default 1
+        range 0 1
+        help
+            UART peripheral used for the RS-485 bus. UART0 is the console.
+
+    config MODBUS_RTU_BAUD_RATE
+        int "Baud rate"
+        default 9600
+        help
+            Must match the pymodbus slave on the Raspberry Pi
+            (tools/pymodbus_slave/rtu_slave.py). Framing is fixed at 8N1.
+
+    config MODBUS_RTU_SLAVE_ADDR
+        int "Slave address"
+        default 1
+        range 1 247
+
+    config MODBUS_RTU_TX_PIN
+        int "TX GPIO pin"
+        default 17
+
+    config MODBUS_RTU_RX_PIN
+        int "RX GPIO pin"
+        default 18
+
+    config MODBUS_RTU_DE_RE_PIN
+        int "DE/RE GPIO pin"
+        default 8
+        help
+            RS-485 direction control, driven as the UART's RTS line by
+            UART_MODE_RS485_HALF_DUPLEX.
+
+    config MODBUS_RTU_RESPONSE_TIMEOUT_MS
+        int "Slave response timeout (ms)"
+        default 200
+        range 20 2000
+        help
+            Time to wait for a reply before marking every register ERROR. A
+            17-byte reply at 9600 baud takes about 18 ms on the wire, so this
+            leaves ample room for slave turnaround.
+
+endmenu
