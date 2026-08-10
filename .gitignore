@@ -19,3 +19,7 @@ compile_commands.json
 # Editor / OS cruft
 *.swp
 .DS_Store
+
+# Python bytecode from tools/pymodbus_slave
+__pycache__/
+*.py[cod]
