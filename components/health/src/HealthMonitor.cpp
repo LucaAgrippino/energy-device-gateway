@@ -74,12 +74,17 @@ std::string HealthMonitor::buildJson() const {
     // figure alone. Reporting the total makes the requirement checkable
     // straight from the response.
     const uint32_t total_heap = heap_caps_get_total_size(MALLOC_CAP_DEFAULT);
-    const uint32_t uptime_s =
+    const auto uptime_s =
         static_cast<uint32_t>((esp_timer_get_time() - boot_time_) / 1000000);
 
     wifi_ap_record_t ap_info{};
-    const bool   connected = (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK);
-    const int8_t rssi = connected ? ap_info.rssi : 0;
+    const bool       connected = (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK);
+    // Not a ternary: its operands promote to int, so assigning back to int8_t
+    // is a narrowing conversion even though both values already fit.
+    int8_t rssi = 0;
+    if (connected) {
+        rssi = ap_info.rssi;
+    }
 
     // DESIGN.md §6 formats into a fixed `char buf[512]` with a running
     // `pos += snprintf(...)`. That is the same defect fixed in the publisher
