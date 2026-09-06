@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <utility>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -68,6 +69,11 @@ esp_err_t HealthMonitor::healthHandler(httpd_req_t* req) {
 std::string HealthMonitor::buildJson() const {
     const uint32_t free_heap = esp_get_free_heap_size();
     const uint32_t min_heap = esp_get_minimum_free_heap_size();
+    // Not in DESIGN.md §2, but §2 states the endpoint exists to verify
+    // REQ-NF-002 (<=80% heap used) — which cannot be computed from a free
+    // figure alone. Reporting the total makes the requirement checkable
+    // straight from the response.
+    const uint32_t total_heap = heap_caps_get_total_size(MALLOC_CAP_DEFAULT);
     const uint32_t uptime_s =
         static_cast<uint32_t>((esp_timer_get_time() - boot_time_) / 1000000);
 
@@ -87,11 +93,12 @@ std::string HealthMonitor::buildJson() const {
 
     char header[192];
     snprintf(header, sizeof(header),
-             R"({"uptime_s":%lu,"heap":{"free":%lu,"min_ever":%lu},)"
+             R"({"uptime_s":%lu,"heap":{"free":%lu,"min_ever":%lu,"total":%lu},)"
              R"("wifi":{"rssi":%d,"connected":%s},"tasks":[)",
              static_cast<unsigned long>(uptime_s),
              static_cast<unsigned long>(free_heap),
-             static_cast<unsigned long>(min_heap), rssi,
+             static_cast<unsigned long>(min_heap),
+             static_cast<unsigned long>(total_heap), rssi,
              connected ? "true" : "false");
     out += header;
 
