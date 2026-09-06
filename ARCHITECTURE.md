@@ -181,9 +181,12 @@ Components are held as `std::unique_ptr` in `app_main`; there is no raw
 
 No single source can take the gateway down (**REQ-NF-001**):
 
-- A Modbus device that fails to initialise is **logged, not fatal** — its
-  registers report `ERROR` and every other source keeps streaming. This was
-  verified all session with the RS-485 hardware absent.
+- **Any** source that fails to initialise is logged, not fatal — its readings
+  report `ERROR` or `TIMEOUT` and every other source keeps streaming. The IMU
+  was originally the exception: `ESP_ERROR_CHECK(g_imu->init())` aborted, so a
+  single nudged I2C jumper reboot-looped the entire gateway, taking both Modbus
+  transports, the aggregator and the dashboard with it. That contradicted
+  REQ-NF-001 and is fixed.
 - `modbus_tcp_task` waits on the Wi-Fi event group before opening a socket, and
   publishes `TIMEOUT` while the link is down rather than letting the dashboard
   freeze on stale values.
@@ -193,8 +196,10 @@ No single source can take the gateway down (**REQ-NF-001**):
 - A publisher that fails to start leaves sensors running; only the dashboard is
   lost.
 
-Fatal (`ESP_ERROR_CHECK`) is reserved for the I2C bus and Wi-Fi init, where
-there is nothing sensible to degrade to.
+Fatal (`ESP_ERROR_CHECK`) is now reserved for creating the I2C *bus* and for
+Wi-Fi init — allocating a bus controller failing means the SoC peripheral is
+unusable. A *device* on that bus not answering is a runtime condition and
+degrades gracefully.
 
 ---
 
