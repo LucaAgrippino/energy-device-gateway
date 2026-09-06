@@ -26,14 +26,24 @@ i2c_master_bus_handle_t openTestBus() {
 // The tests below marked [hw] require a Drotek MPU9150 wired to I2C0
 // (SDA=GPIO1, SCL=GPIO2, DESIGN.md §2). Run via the ESP-IDF unit-test-app,
 // on-target.
+//
+// Each [hw] case releases the I2C bus *before* asserting anything about the
+// device. Unity's TEST_ESP_OK aborts the case with longjmp, which does not
+// unwind C++ destructors — so asserting first left the bus acquired, and every
+// later case then failed with "I2C bus id(0) has already been acquired"
+// instead of its own result. One unresponsive sensor was reported as three
+// unrelated failures, two of which never actually ran.
 
 TEST_CASE("MPU9150 init wakes device and passes WHO_AM_I probe", "[imu][hw]") {
     i2c_master_bus_handle_t bus = openTestBus();
+    esp_err_t init_err = ESP_FAIL;
     {
         Mpu9150 imu(bus, kImuAddr);
-        TEST_ESP_OK(imu.init());
+        init_err = imu.init();
     }  // destructor removes the device here, before the bus is deleted
     TEST_ESP_OK(i2c_del_master_bus(bus));
+
+    TEST_ESP_OK(init_err);
 }
 
 TEST_CASE("MPU9150 burst read measures 1g total while stationary", "[imu][hw]") {
@@ -44,13 +54,18 @@ TEST_CASE("MPU9150 burst read measures 1g total while stationary", "[imu][hw]") 
     // so it tests the same thing (device woken, range configured, all three
     // axes scaled correctly) without depending on the bench.
     i2c_master_bus_handle_t bus = openTestBus();
-    ImuReading reading;
+    esp_err_t init_err = ESP_FAIL;
+    ImuReading reading{};  // value-initialised: read() is skipped if init fails
     {
         Mpu9150 imu(bus, kImuAddr);
-        TEST_ESP_OK(imu.init());
-        reading = imu.read();
+        init_err = imu.init();
+        if (init_err == ESP_OK) {
+            reading = imu.read();
+        }
     }  // destructor removes the device here, before the bus is deleted
     TEST_ESP_OK(i2c_del_master_bus(bus));
+
+    TEST_ESP_OK(init_err);
 
     const float magnitude = std::sqrt((reading.accel_x * reading.accel_x) +
                                       (reading.accel_y * reading.accel_y) +
@@ -62,11 +77,18 @@ TEST_CASE("MPU9150 burst read measures 1g total while stationary", "[imu][hw]") 
 
 TEST_CASE("MPU9150 RAII: construct/destroy releases the I2C device cleanly", "[imu][hw]") {
     i2c_master_bus_handle_t bus = openTestBus();
+    esp_err_t init_err = ESP_FAIL;
     {
         Mpu9150 imu(bus, kImuAddr);
-        TEST_ESP_OK(imu.init());
+        init_err = imu.init();
     }  // destructor removes the device here
+
+    // The point of this case: the bus deletes cleanly, which it only can if the
+    // destructor detached the device. That holds whether or not the sensor
+    // answered, so it is asserted before the init result.
     TEST_ESP_OK(i2c_del_master_bus(bus));
+
+    TEST_ESP_OK(init_err);
 }
 
 TEST_CASE("MPU9150 scaling: known raw values map to expected physical units", "[imu]") {

@@ -35,7 +35,15 @@ Mpu9150::Mpu9150(i2c_master_bus_handle_t bus, uint8_t addr)
     dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     dev_cfg.device_address = addr_;
     dev_cfg.scl_speed_hz = kI2cClockHz;
-    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_, &dev_cfg, &dev_handle_));
+    // Not ESP_ERROR_CHECK: ARCHITECTURE.md §8 reserves fatal for creating the
+    // I2C *bus*, and app_main already degrades a failed IMU to TIMEOUT rather
+    // than aborting (REQ-NF-001). A constructor cannot return, so the error is
+    // held and surfaced from init(), which is the path app_main checks.
+    dev_add_err_ = i2c_master_bus_add_device(bus_, &dev_cfg, &dev_handle_);
+    if (dev_add_err_ != ESP_OK) {
+        ESP_LOGE(kTag, "could not attach device 0x%02X to the I2C bus: %s", addr_,
+                 esp_err_to_name(dev_add_err_));
+    }
 }
 
 Mpu9150::~Mpu9150() {
@@ -48,6 +56,10 @@ Mpu9150::~Mpu9150() {
 }
 
 esp_err_t Mpu9150::init() {
+    if (dev_add_err_ != ESP_OK) {
+        return dev_add_err_;
+    }
+
     esp_err_t err = writeReg(kRegPwrMgmt1, 0x00);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "failed to wake device: %s", esp_err_to_name(err));
