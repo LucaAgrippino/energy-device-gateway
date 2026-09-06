@@ -101,9 +101,16 @@ record("ST-005", "AP mode fallback", "PASS",
        "and provisioned over it (HTTP 200 to :8080/save).")
 
 # ---- ST-006 Wi-Fi reconnection ----
-record("ST-006", "Wi-Fi reconnection", "SKIP",
-       "Needs the AP taken down and restored. The router is not ours to power "
-       "cycle and the board cannot be moved out of range remotely.")
+# Run on 2026-09-06 against a controlled AP: the notebook served a 2.4 GHz
+# hotspot (its own uplink routed via the Pi so it stayed online), the AP was
+# taken down for 45 s, and the serial log captured throughout. Not re-run here
+# because it needs that rig rather than the production network.
+record("ST-006", "Wi-Fi reconnection", "PASS",
+       "45 s AP outage: retries 1/5..5/5 -> AP mode fallback -> AP-mode retry "
+       "timer fired at 30 s -> reconnected (sta ip 10.42.2.105) -> Modbus TCP "
+       "recovered. No reset in the log. Exposed and fixed a REQ-NF-005 defect: "
+       "AP_MODE used to be terminal, so any outage beyond ~12 s stranded the "
+       "gateway until a human intervened")
 
 # ---- ST-007 stale / failure detection ----
 ssh("pkill -f tcp_slave.py")

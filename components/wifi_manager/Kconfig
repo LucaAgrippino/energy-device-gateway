@@ -8,6 +8,18 @@ menu "Wi-Fi Manager Configuration"
         int "Max STA reconnect retries before AP fallback"
         default 5
 
+    config WIFI_AP_STA_RETRY_S
+        int "Retry stored credentials from AP mode every N seconds"
+        default 30
+        range 10 600
+        help
+            AP fallback is not a terminal state. While the provisioning AP is
+            running, the stored NVS credentials are retried this often, so an
+            outage longer than WIFI_MAX_RETRIES tolerates — a router reboot,
+            for instance — recovers without a power cycle. Retries are skipped
+            while a client is connected to the AP, so they never interrupt
+            someone entering credentials.
+
     config WIFI_AP_SSID
         string "AP mode SSID"
         default "EDG-Setup"

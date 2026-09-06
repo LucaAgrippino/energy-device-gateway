@@ -16,7 +16,7 @@ implementation, and tests at unit, integration, system and acceptance level.
 |---|---|---|
 | `common` | `common-v1.0` | n/a (shared types) |
 | `imu` | `imu-v1.0` | Yes — MPU9150 on I2C0 |
-| `wifi_manager` | `wifi_manager-v1.1` | Yes — STA, AP fallback, NVS provisioning |
+| `wifi_manager` | `wifi_manager-v1.2` | Yes — STA, AP fallback, NVS provisioning, outage recovery |
 | `aggregator` | `aggregator-v1.1` | Yes |
 | `publisher` | `publisher-v1.1` | Yes — dashboard + `/ws` + latency measured |
 | `modbus_device` (TCP) | `modbus_device-v1.1` | Yes — against a pymodbus slave |
@@ -24,7 +24,8 @@ implementation, and tests at unit, integration, system and acceptance level.
 | `health` | `health-v1.0` | Yes — `/health` |
 
 On-target unit tests: **20 passing, 0 failing**.
-System tests: **7 passing, 1 skipped** (Wi-Fi reconnect needs router access).
+System tests: **8 of 8 have passed**. ST-001 and ST-007 require the IMU's ground
+connected — see the hardware note in [docs/acceptance_results.md](docs/acceptance_results.md).
 See [docs/day7_system_test_plan.md](docs/day7_system_test_plan.md).
 
 ---
@@ -161,8 +162,10 @@ these simulators depend on. See `tools/pymodbus_slave/requirements.txt`.
 
 ## Known limitations
 
-- **Wi-Fi reconnect after losing an established link** is untested; AP fallback
-  and first-connect retry are both verified.
+- **The Freenove ESP32-S3 WROOM board has a single GND pin**, which the RS-485
+  module occupies. The IMU needs a ground junction (the RS-485 module's second
+  GND, or a breadboard rail); with its ground floating the MPU9150 ACKs its
+  address but returns no data.
 - 2.4 GHz only, as the ESP32-S3 radio has no 5 GHz support.
 
 ## License

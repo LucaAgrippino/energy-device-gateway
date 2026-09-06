@@ -53,6 +53,15 @@ private:
     esp_event_handler_instance_t ip_handler_instance_{nullptr};
     esp_timer_handle_t sta_timeout_timer_{nullptr};
 
+    // DESIGN.md §2: AP_MODE is not terminal. While the fallback AP is running
+    // this timer periodically re-tries the credentials stored in NVS, so a
+    // router that reboots — or any outage longer than
+    // CONFIG_WIFI_MAX_RETRIES allows — heals itself without a power cycle.
+    esp_timer_handle_t ap_sta_retry_timer_{nullptr};
+    // Suppresses those retries while somebody is actually provisioning, since
+    // each attempt takes the AP down for a few seconds.
+    int ap_client_count_{0};
+
     // Provisioning HTTP server (AP mode only) — separate port from
     // publisher's dashboard (DESIGN.md §8) so both can run at once, since
     // sensors/telemetry keep running regardless of Wi-Fi state.
@@ -64,6 +73,9 @@ private:
     void handleIpEvent(int32_t event_id, void* event_data);
     void switchToAp();
     static void staTimeoutCallback(void* arg);
+    static void apStaRetryCallback(void* arg);
+    void        startApStaRetryTimer();
+    void        stopApStaRetryTimer();
 
     esp_err_t startProvisioningServer();
     void stopProvisioningServer();

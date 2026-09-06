@@ -27,19 +27,31 @@ connection state to other components via an event group.
                            │ start()
                            ▼
                     ┌──────────────┐
-            ┌──────│ CONNECTING   │──── timeout ──┐
-            │      └──────┬───────┘               │
-            │             │ GOT_IP                 │
-            │             ▼                        ▼
-            │      ┌──────────────┐        ┌──────────────┐
-            │      │  CONNECTED   │        │   AP_MODE    │
-            │      └──────┬───────┘        └──────────────┘
-            │             │ DISCONNECTED
-            │             ▼
-            │      ┌──────────────┐
-            └──────│ RECONNECTING │
-                   └──────────────┘
+            ┌──────▶│ CONNECTING   │──── timeout ──┐
+            │       └──────┬───────┘               │
+            │              │ GOT_IP                │
+            │              ▼                       ▼
+            │       ┌──────────────┐       ┌──────────────┐
+            │       │  CONNECTED   │       │   AP_MODE    │
+            │       └──────┬───────┘       └──────┬───────┘
+            │              │ DISCONNECTED         │
+            │              ▼                      │ retry timer, every
+            │       ┌──────────────┐              │ WIFI_AP_STA_RETRY_S,
+            └───────│ RECONNECTING │              │ if NVS creds exist and
+                    └──────┬───────┘              │ no AP client is attached
+                           │ retries exhausted    │
+                           ▼                      │
+                    ┌──────────────┐              │
+                    │   AP_MODE    │◀─────────────┘
+                    └──────────────┘
 ```
+
+**`AP_MODE` is deliberately not terminal.** An earlier revision had no arrow out
+of it, which meant any outage lasting longer than `WIFI_MAX_RETRIES` allows —
+roughly 12 s at the defaults — left the gateway serving a provisioning AP
+forever, needing a human. A router reboot is enough to trigger it. Measured on
+hardware: a 25 s AP outage stranded the device permanently, and only a reset
+recovered it, which is precisely what REQ-NF-005 forbids.
 
 | State | Description | Entry Action |
 |-------|-------------|-------------|
@@ -47,7 +59,7 @@ connection state to other components via an event group.
 | `CONNECTING` | STA attempting to connect | `esp_wifi_connect()`, start timeout timer |
 | `CONNECTED` | STA connected, IP acquired | Set `CONNECTED_BIT` in event group |
 | `RECONNECTING` | STA lost connection, retrying | Increment retry counter, `esp_wifi_connect()` |
-| `AP_MODE` | Fallback AP running | Start SoftAP with config SSID/password |
+| `AP_MODE` | Fallback AP running | Start SoftAP with config SSID/password, arm the STA retry timer |
 
 ### Configurable Parameters (Kconfig)
 
@@ -55,6 +67,7 @@ connection state to other components via an event group.
 |-----------|---------|----------------|
 | STA connection timeout | 10 s | `CONFIG_WIFI_STA_TIMEOUT_S` |
 | Max reconnect retries | 5 | `CONFIG_WIFI_MAX_RETRIES` |
+| AP-mode STA retry period | 30 s | `CONFIG_WIFI_AP_STA_RETRY_S` |
 | AP mode SSID | `"EDG-Setup"` | `CONFIG_WIFI_AP_SSID` |
 | AP mode password | `"edg12345"` | `CONFIG_WIFI_AP_PASSWORD` |
 | AP mode channel | 1 | `CONFIG_WIFI_AP_CHANNEL` |
@@ -292,7 +305,8 @@ bring up STA live from inside an HTTP handler.
 |-------|-----------|----------|
 | NVS init fails (corrupted) | `nvs_flash_init()` returns `ESP_ERR_NVS_NO_FREE_PAGES` or `ESP_ERR_NVS_NEW_VERSION_FOUND` | Erase NVS partition, re-init |
 | No credentials in NVS | `loadCredentials()` returns `ESP_ERR_NVS_NOT_FOUND` | Start AP mode directly |
-| STA connection timeout | Retry count exceeds `CONFIG_WIFI_MAX_RETRIES` | Switch to AP mode, set `AP_MODE_BIT` |
+| STA connection timeout | Retry count exceeds `CONFIG_WIFI_MAX_RETRIES` | Switch to AP mode, set `AP_MODE_BIT`, arm the retry timer |
+| AP running but the network returns | `CONFIG_WIFI_AP_STA_RETRY_S` elapses with stored credentials present and no AP client attached | Stop the provisioning server, re-attempt STA. A failure re-enters AP mode and re-arms the timer, so the loop continues indefinitely |
 | STA disconnected (runtime) | `WIFI_EVENT_STA_DISCONNECTED` | Auto-reconnect, clear `CONNECTED_BIT`, set `DISCONNECTED_BIT` |
 | DHCP timeout | No `IP_EVENT_STA_GOT_IP` within timeout | Treated as connection failure, retry |
 
