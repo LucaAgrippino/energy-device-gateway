@@ -17,7 +17,16 @@ Snapshot Aggregator::collectSnapshot(int64_t now_us) {
         // receive) so a source that hasn't produced a new reading since the
         // last cycle still reports its latest known value (DESIGN.md §2).
         if (xQueuePeek(entry.queue, &reading, 0) == pdTRUE) {
-            reading.status = checkStale(reading.timestamp, snap.timestamp, entry.timeout_us);
+            // Staleness may only downgrade the producer's verdict, never
+            // replace it. Assigning a freshness result straight into status
+            // silently discarded any Status::ERROR a device had set: both
+            // Modbus devices republish allFailed() with a *fresh* timestamp on
+            // every failed poll, so the reading never looked stale and a dead
+            // slave was reported as OK with a value of 0 — indistinguishable
+            // from a healthy source genuinely reading zero (DESIGN.md §7).
+            if (isStale(reading.timestamp, snap.timestamp, entry.timeout_us)) {
+                reading.status = Reading::Status::TIMEOUT;
+            }
         } else {
             // Mailbox empty — no data ever received from this source.
             reading.source = entry.name;
@@ -32,11 +41,11 @@ Snapshot Aggregator::collectSnapshot(int64_t now_us) {
     return snap;
 }
 
-Reading::Status Aggregator::checkStale(int64_t reading_ts, int64_t now, int64_t timeout) {
-    if (now - reading_ts > timeout) {
-        return Reading::Status::TIMEOUT;
-    }
-    return Reading::Status::OK;
+// Returns a plain predicate rather than a Status. The previous signature
+// returned OK/TIMEOUT, which made `status = checkStale(...)` the natural-looking
+// call and was exactly how the producer's own status came to be overwritten.
+bool Aggregator::isStale(int64_t reading_ts, int64_t now, int64_t timeout) {
+    return now - reading_ts > timeout;
 }
 
 void Aggregator::run() {
