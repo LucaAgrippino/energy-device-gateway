@@ -145,12 +145,13 @@ dashboard is now trustworthy.
 - [x] ~~**Pi has no path to the ESP32 for Day 6 (Modbus TCP).**~~ — **resolved 2026-09-06.** Both
   devices now join the room's `VM0898060` 2.4 GHz BSS (`CC:58:30:EC:EB:A7`, ch 6); the Pi keeps
   the `10.42.0.50` Ethernet link as the control channel at route metric 200 vs the Wi-Fi's 700
-- [ ] Make the Pi's route persistent (or re-run the two `ip` commands after each reboot): the
-  `10.42.0.50/24` address and default route are runtime-only. Persisting means editing the
-  netplan profile that currently pins `192.168.50.10/24` — deliberately left alone
+- [x] ~~Make the Pi's route persistent~~ — **done.** `10.42.0.50/24` and the metric-200 default
+  route are in the Pi's netplan profile alongside its original `192.168.50.10/24`; verified
+  again 2026-09-06 by reading `/etc/netplan/*.yaml` directly
 - [ ] Day 5: Modbus RTU — **component implemented and building clean; not yet run against
-  hardware.** Needs the RS-485 wiring, the pymodbus RTU slave, and the on-target unit-test run
-- [ ] Day 6: Modbus TCP (design exists, implementation not started)
+  hardware.** `rtu_slave.py` is written and deployed; what remains is the RS-485 wiring (blocked
+  on female-female jumpers + the CH340 adapter) and the on-target unit-test run
+- [x] ~~Day 6: Modbus TCP~~ — **done and hardware-validated 2026-09-06** (`modbus_device-v1.1`)
 - [ ] Day 7: System test + acceptance + documentation (test plan exists on the drive)
 - [ ] `health` component (heap/RSSI/stack HWM `/health` endpoint referenced in publisher DESIGN.md §4 but not yet implemented — `health_DESIGN.md` exists on the drive)
 - [ ] Wi-Fi Manager integration test still not exercised on hardware: STA reconnect (interrupt an already-good connection, verify auto-reconnect without reprovisioning) — the only one of the five DESIGN.md §11 integration tests still open; needs the board moved out of Wi-Fi range briefly.
