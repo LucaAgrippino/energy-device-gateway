@@ -46,6 +46,10 @@ WifiManager::~WifiManager() {
         esp_timer_stop(sta_timeout_timer_);
         esp_timer_delete(sta_timeout_timer_);
     }
+    if (ap_sta_retry_timer_ != nullptr) {
+        esp_timer_stop(ap_sta_retry_timer_);
+        esp_timer_delete(ap_sta_retry_timer_);
+    }
     if (wifi_handler_instance_ != nullptr) {
         esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_handler_instance_);
     }
@@ -286,10 +290,14 @@ void WifiManager::handleWifiEvent(int32_t event_id, void* /*event_data*/) {
             }
             break;
         case WIFI_EVENT_AP_STACONNECTED:
-            ESP_LOGI(kTag, "client connected to AP");
+            ap_client_count_++;
+            ESP_LOGI(kTag, "client connected to AP (%d connected)", ap_client_count_);
             break;
         case WIFI_EVENT_AP_STADISCONNECTED:
-            ESP_LOGI(kTag, "client disconnected from AP");
+            if (ap_client_count_ > 0) {
+                ap_client_count_--;
+            }
+            ESP_LOGI(kTag, "client disconnected from AP (%d connected)", ap_client_count_);
             break;
         default:
             break;
@@ -304,6 +312,9 @@ void WifiManager::handleIpEvent(int32_t event_id, void* event_data) {
         esp_timer_delete(sta_timeout_timer_);
         sta_timeout_timer_ = nullptr;
     }
+
+    // Back on the network, so the AP-mode recovery loop has done its job.
+    stopApStaRetryTimer();
 
     auto* event = static_cast<ip_event_got_ip_t*>(event_data);
     state_ = State::CONNECTED;
@@ -326,6 +337,78 @@ void WifiManager::switchToAp() {
     esp_err_t err = startAp();
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "failed to start AP fallback: %s", esp_err_to_name(err));
+        return;
+    }
+    // DESIGN.md §2: leaving AP_MODE terminal meant any outage longer than
+    // CONFIG_WIFI_MAX_RETRIES * the driver's retry spacing (~12 s by default)
+    // stranded the gateway in provisioning mode until a human intervened —
+    // a router reboot alone was enough. Measured on hardware: a 25 s outage
+    // left it here permanently. The AP now re-tries the stored credentials
+    // periodically so it heals itself.
+    startApStaRetryTimer();
+}
+
+void WifiManager::startApStaRetryTimer() {
+    if (ap_sta_retry_timer_ == nullptr) {
+        const esp_timer_create_args_t args = {
+            .callback = &apStaRetryCallback,
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "ap_sta_retry",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&args, &ap_sta_retry_timer_) != ESP_OK) {
+            ESP_LOGE(kTag, "could not create the AP-mode STA retry timer");
+            return;
+        }
+    }
+    esp_timer_stop(ap_sta_retry_timer_);
+    const uint64_t period_us = static_cast<uint64_t>(CONFIG_WIFI_AP_STA_RETRY_S) * 1000000ULL;
+    if (esp_timer_start_periodic(ap_sta_retry_timer_, period_us) == ESP_OK) {
+        ESP_LOGI(kTag, "will retry stored credentials every %d s while in AP mode",
+                 CONFIG_WIFI_AP_STA_RETRY_S);
+    }
+}
+
+void WifiManager::stopApStaRetryTimer() {
+    if (ap_sta_retry_timer_ != nullptr) {
+        esp_timer_stop(ap_sta_retry_timer_);
+    }
+}
+
+void WifiManager::apStaRetryCallback(void* arg) {
+    auto* self = static_cast<WifiManager*>(arg);
+
+    if (self->state_ != State::AP_MODE) {
+        return;  // already left AP mode; nothing to do
+    }
+    if (self->ap_client_count_ > 0) {
+        // Someone is provisioning right now. Reconnecting would drop them
+        // mid-form, and they are about to supply credentials anyway.
+        ESP_LOGD(kTag, "skipping STA retry, %d client(s) on the AP",
+                 self->ap_client_count_);
+        return;
+    }
+
+    char ssid[33] = {};
+    char password[65] = {};
+    if (self->loadCredentials(ssid, sizeof(ssid), password, sizeof(password)) != ESP_OK) {
+        // Never provisioned — AP mode is the correct resting state.
+        return;
+    }
+
+    ESP_LOGI(kTag, "AP mode: retrying stored credentials for '%s'", ssid);
+    self->stopApStaRetryTimer();
+    self->stopProvisioningServer();
+    self->retry_count_ = 0;
+    esp_wifi_stop();
+    // A failure here re-enters switchToAp() through the normal disconnect
+    // path, which re-arms this timer — so the retry loop continues rather
+    // than stopping at the first unsuccessful attempt.
+    esp_err_t err = self->startSta(ssid, password);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "retry failed to start STA: %s", esp_err_to_name(err));
+        self->switchToAp();
     }
 }
 
