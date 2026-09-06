@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "Aggregator.hpp"
+#include "HealthMonitor.hpp"
 #include "ImuTask.hpp"
 #include "ModbusRtuDevice.hpp"
 #include "ModbusRtuTask.hpp"
@@ -44,6 +45,11 @@ constexpr UBaseType_t kModbusRtuTaskPriority = 4;
 constexpr uint32_t kModbusTcpTaskStackBytes = 4096;
 constexpr UBaseType_t kModbusTcpTaskPriority = 4;
 
+// health DESIGN.md §7 "Task Parameters" — lowest priority, no core affinity,
+// so monitoring never preempts the sensor pipeline.
+constexpr uint32_t kHealthTaskStackBytes = 4096;
+constexpr UBaseType_t kHealthTaskPriority = 1;
+
 // Both publisher and aggregator DESIGN.md task tables specify "Core 1 — keep
 // off core 0 (Wi-Fi)"; plain xTaskCreate doesn't pin, so both use
 // xTaskCreatePinnedToCore instead.
@@ -58,6 +64,17 @@ std::unique_ptr<ModbusRtuDevice> g_modbus_rtu;
 ModbusRtuTaskContext g_modbus_rtu_ctx;
 std::unique_ptr<ModbusTcpDevice> g_modbus_tcp;
 ModbusTcpTaskContext g_modbus_tcp_ctx;
+std::unique_ptr<HealthMonitor> g_health;
+
+// health DESIGN.md §3: app_main creates every task and hands their handles to
+// HealthMonitor, rather than the monitor discovering tasks at runtime. A task
+// that failed to start stays null and is skipped (§9).
+TaskHandle_t g_imu_task{nullptr};
+TaskHandle_t g_modbus_rtu_task{nullptr};
+TaskHandle_t g_modbus_tcp_task{nullptr};
+TaskHandle_t g_publisher_task{nullptr};
+TaskHandle_t g_aggregator_task{nullptr};
+TaskHandle_t g_health_task{nullptr};
 
 // modbus_device DESIGN.md §6, using the simulated-inverter map from
 // VISION.md §7.2. Names are fully qualified ("modbus_rtu.voltage") to match the
@@ -136,7 +153,8 @@ extern "C" void app_main(void) {
     g_imu_ctx.gyro_z_mailbox = xQueueCreate(1, sizeof(Reading));
     g_imu_ctx.temp_mailbox = xQueueCreate(1, sizeof(Reading));
 
-    xTaskCreate(imuTask, "imu_task", kImuTaskStackBytes, &g_imu_ctx, kImuTaskPriority, nullptr);
+    xTaskCreate(imuTask, "imu_task", kImuTaskStackBytes, &g_imu_ctx, kImuTaskPriority,
+                &g_imu_task);
 
     // One mailbox per RTU register, in register-map order (modbus_device
     // DESIGN.md §10, fanned out the same way as the IMU rather than shipping a
@@ -163,7 +181,7 @@ extern "C" void app_main(void) {
     if (rtu_err == ESP_OK) {
         g_modbus_rtu_ctx.device = g_modbus_rtu.get();
         xTaskCreatePinnedToCore(modbusRtuTask, "modbus_rtu_task", kModbusRtuTaskStackBytes,
-                                &g_modbus_rtu_ctx, kModbusRtuTaskPriority, nullptr,
+                                &g_modbus_rtu_ctx, kModbusRtuTaskPriority, &g_modbus_rtu_task,
                                 kSensorPipelineCore);
     } else {
         ESP_LOGE(kTag, "Modbus RTU init failed: %s — those registers stay stale",
@@ -187,7 +205,7 @@ extern "C" void app_main(void) {
     g_modbus_tcp_ctx.wifi_event_group = g_wifi->eventGroup();
     g_modbus_tcp_ctx.connected_bit = WifiManager::CONNECTED_BIT;
     xTaskCreatePinnedToCore(modbusTcpTask, "modbus_tcp_task", kModbusTcpTaskStackBytes,
-                            &g_modbus_tcp_ctx, kModbusTcpTaskPriority, nullptr,
+                            &g_modbus_tcp_ctx, kModbusTcpTaskPriority, &g_modbus_tcp_task,
                             kSensorPipelineCore);
 
     g_publisher = std::make_unique<WsPublisher>();
@@ -198,7 +216,8 @@ extern "C" void app_main(void) {
                  esp_err_to_name(publisher_err));
     }
     xTaskCreatePinnedToCore(publisherTaskFn, "publisher_task", kPublisherTaskStackBytes,
-                            g_publisher.get(), kPublisherTaskPriority, nullptr, kSensorPipelineCore);
+                            g_publisher.get(), kPublisherTaskPriority, &g_publisher_task,
+                            kSensorPipelineCore);
 
     constexpr int64_t kImuStaleUs = CONFIG_IMU_STALE_TIMEOUT_MS * 1000LL;
     std::vector<MailboxEntry> mailboxes = {
@@ -226,5 +245,34 @@ extern "C" void app_main(void) {
 
     g_aggregator = std::make_unique<Aggregator>(std::move(mailboxes), *g_publisher);
     xTaskCreatePinnedToCore(aggregatorTaskFn, "aggregator_task", kAggregatorTaskStackBytes,
-                            g_aggregator.get(), kAggregatorTaskPriority, nullptr, kSensorPipelineCore);
+                            g_aggregator.get(), kAggregatorTaskPriority, &g_aggregator_task,
+                            kSensorPipelineCore);
+
+    // health DESIGN.md §3: the handler is registered on the publisher's server,
+    // whose lifetime the publisher owns — so this must come after start(), and
+    // is skipped entirely if the server never came up.
+    g_health = std::make_unique<HealthMonitor>(
+        g_publisher->serverHandle(),
+        std::vector<TaskInfo>{
+            {.name = "imu", .handle = g_imu_task, .stack_total = kImuTaskStackBytes},
+            {.name = "modbus_rtu", .handle = g_modbus_rtu_task,
+             .stack_total = kModbusRtuTaskStackBytes},
+            {.name = "modbus_tcp", .handle = g_modbus_tcp_task,
+             .stack_total = kModbusTcpTaskStackBytes},
+            {.name = "aggregator", .handle = g_aggregator_task,
+             .stack_total = kAggregatorTaskStackBytes},
+            {.name = "publisher", .handle = g_publisher_task,
+             .stack_total = kPublisherTaskStackBytes},
+            // Handle filled in immediately after xTaskCreate below — the task
+            // does not exist yet, and a null handle is skipped until it does.
+            {.name = "health", .handle = nullptr, .stack_total = kHealthTaskStackBytes},
+        });
+
+    esp_err_t health_err = g_health->init();
+    if (health_err != ESP_OK) {
+        ESP_LOGW(kTag, "health endpoint unavailable: %s", esp_err_to_name(health_err));
+    }
+    xTaskCreate(healthTask, "health_task", kHealthTaskStackBytes, g_health.get(),
+                kHealthTaskPriority, &g_health_task);
+    g_health->setTaskHandle("health", g_health_task);
 }
