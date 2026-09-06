@@ -140,7 +140,12 @@ down). `v1.0` is deliberately not tagged until both close.
 
 ## Not Started
 
-- [ ] Copy the remaining recovered design docs off `/media/luca/Data/energy_device_gateway/`
+- [x] ~~Copy the remaining recovered design docs~~ — **done.** `common_DESIGN.md` copied in as
+  `components/common/DESIGN.md` (2026-09-06); every component now has its design in-repo. The
+  earlier note that `DeviceConfig.hpp`'s "fields are never specified anywhere" was **wrong** —
+  they are specified in that doc's §4, which had simply never been read. Still unimplemented;
+  see Open Decisions.
+- [x] ~~Older wording of the same item~~ — off `/media/luca/Data/energy_device_gateway/`
   into their component folders **as each module is implemented** (the convention applied to
   `modbus_device`): `health_DESIGN.md`, `common_DESIGN.md`, `day7_system_test_plan.md`, and
   `modbus_tcp_DESIGN.md` for Day 6. Until then they are read in place on the drive
@@ -197,7 +202,15 @@ down). `v1.0` is deliberately not tagged until both close.
 
 ## Open Decisions
 
-None currently.
+1. **Implement `DeviceConfig.hpp` or drop it from the design?** `common_DESIGN.md` §4
+   specifies `I2cConfig`, `ModbusRtuConfig` and `ModbusTcpConfig` — structs populated from
+   Kconfig in `app_main` and passed to constructors. It is the only specified-but-unbuilt
+   item left. Adopting it means changing the constructors of `Mpu9150`, `ModbusRtuDevice`
+   and `ModbusTcpDevice`, all of which are hardware-validated, for no behaviour change.
+   The argument for: `ModbusRtuDevice`'s constructor takes six positional parameters, four
+   of them `gpio_num_t`/integers, so transposing TX and RX is a silent bug a struct with
+   named fields would prevent. The argument against: it is churn in working code, and
+   `main.cpp` already reads the same Kconfig values in one place.
 
 ---
 
