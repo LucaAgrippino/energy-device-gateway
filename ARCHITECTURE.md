@@ -44,7 +44,7 @@ the first predates the decision and has ample headroom, the second is explicitly
 `tskNO_AFFINITY` so monitoring runs only in slack time.
 
 Measured stack headroom is in [docs/ram_budget.md](docs/ram_budget.md); the
-tightest is 42%.
+tightest is `modbus_tcp` at 38.3%, against a 25% target.
 
 ---
 
@@ -167,10 +167,18 @@ release a destructor:
 | UART port + RS-485 mode | `ModbusRtuDevice` |
 | TCP socket | `ModbusTcpDevice` (reopened lazily on failure) |
 | HTTP server | `WsPublisher` |
-| Wi-Fi init, event handlers, timer | `WifiManager` |
+| Wi-Fi init, event handlers, timers | `WifiManager` |
+| Default event loop, NVS | `WifiManager`, but only when `init()` created them |
 
 `HealthMonitor` is the deliberate exception: it registers a URI on the
 publisher's server but does not own it, so it releases nothing.
+
+RAII cuts both ways, and the second half is easy to miss: release everything you
+took, and *nothing you did not*. `WifiManager` tracks whether its own `init()`
+created the default event loop and brought NVS up, because both are process-wide
+singletons that something else may already own. `esp_netif_init()` is the one
+acquisition with no release at all — `esp_netif_deinit()` returns
+`ESP_ERR_NOT_SUPPORTED` once lwIP is running, by ESP-IDF's design.
 
 Components are held as `std::unique_ptr` in `app_main`; there is no raw
 `new`/`delete` anywhere.
@@ -189,7 +197,10 @@ No single source can take the gateway down (**REQ-NF-001**):
   REQ-NF-001 and is fixed.
 - `modbus_tcp_task` waits on the Wi-Fi event group before opening a socket, and
   publishes `TIMEOUT` while the link is down rather than letting the dashboard
-  freeze on stale values.
+  freeze on stale values. Those `TIMEOUT` readings keep the source name already
+  in each mailbox — writing a literal there labelled all five `modbus_tcp`,
+  collapsing five sources into one name for exactly as long as the outage
+  lasted.
 - The TCP socket reconnects lazily inside `readRegisters()`, so a slave that
   disappears and returns recovers without restarting the task or the board —
   verified by killing and restarting the simulator.

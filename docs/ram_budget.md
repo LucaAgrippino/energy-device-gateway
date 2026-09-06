@@ -113,7 +113,8 @@ which returns words — confirmed in
 **REQ-NF-003 (≥ 25% headroom): PASS** — every task clears the target, the tightest
 being `modbus_tcp` at 38.3%.
 
-Total stack allocation is 26,624 bytes; peak combined usage is 11,704 bytes.
+Total stack allocation is 26,624 bytes; peak combined usage is 10,704 bytes —
+the sum of `stack - HWM` down the table above.
 
 ### Notes on individual tasks
 
@@ -122,7 +123,7 @@ Total stack allocation is 26,624 bytes; peak combined usage is 11,704 bytes.
   still builds a full `allFailed()` vector of five `Reading`s after the UART
   read has already used its buffers, whereas a successful decode reuses the
   response buffer it already holds.
-- **`publisher` (63.7%)** carries the largest absolute usage at 2,232 bytes,
+- **`publisher` (62.2%)** carries the largest absolute usage at 2,320 bytes,
   which is expected — it builds the snapshot JSON and drives `httpd_ws_send_data`
   for every connected client. Its 6,144-byte stack is already the largest, and
   the headroom confirms that was the right call.

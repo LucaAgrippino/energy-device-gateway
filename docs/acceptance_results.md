@@ -11,8 +11,16 @@ wired ESP32 ↔ CH340 adapter over Cat6.
 
 **Result: 20 of 20 requirements PASS, 0 BLOCKED, 0 FAIL.**
 
-Two defects were found and fixed in the course of verifying them (REQ-NF-001 and
-REQ-NF-005); both are re-verified above.
+Five defects were found and fixed in the course of verifying these requirements:
+the publisher's snapshot buffer overflow (`publisher-v1.1`), the aggregator
+overwriting a producer's `ERROR` (`aggregator-v1.1`), a fatal IMU init that
+breached REQ-NF-001, a terminal `AP_MODE` that breached REQ-NF-005
+(`wifi_manager-v1.2`), and modem power save widening the latency tail
+(`wifi_manager-v1.1`). All are re-verified above.
+
+Heap and stack figures come from [ram_budget.md](ram_budget.md), which is the
+authority for them; the numbers here are quoted from it rather than measured
+separately.
 
 ---
 
@@ -38,11 +46,11 @@ REQ-NF-005); both are re-verified above.
 | ID | Requirement | Evidence | Status |
 |---|---|---|---|
 | REQ-NF-001 | Unresponsive source doesn't block others | ST-008: TCP slave killed while RS-485 kept streaming `OK`, then recovered. Also **fixed a violation**: `ESP_ERROR_CHECK(g_imu->init())` reboot-looped the whole gateway on a loose I2C wire; the IMU now degrades to `TIMEOUT` like the Modbus sources | **PASS** |
-| REQ-NF-002 | ≤ 80% heap at steady state | Peak 35.9% used (221,300 free of 345,436) | **PASS** |
-| REQ-NF-003 | ≥ 25% stack headroom per task | Worst is `modbus_rtu` at 42.1%; all six tasks pass | **PASS** |
+| REQ-NF-002 | ≤ 80% heap at steady state | Peak 44.7% used (190,860 minimum-ever free of 345,436) | **PASS** |
+| REQ-NF-003 | ≥ 25% stack headroom per task | Worst is `modbus_tcp` at 38.3%; all six tasks pass | **PASS** |
 | REQ-NF-004 | WebSocket latency ≤ 500 ms | median 55 ms, p95 275 ms, max 413 ms | **PASS** |
 | REQ-NF-005 | Recover from Wi-Fi disconnect without reboot | ST-006: 45 s AP outage → retries → AP fallback → AP-mode retry timer → reconnected, no reset. **Found and fixed a real defect**: `AP_MODE` was terminal, so any outage beyond ~12 s stranded the gateway until a human intervened | **PASS** |
-| REQ-NF-006 | RAII for all dynamic resources | Every I2C/UART/socket/server/Wi-Fi handle is constructor-acquired and destructor-released; no raw `new`/`delete`; components held by `unique_ptr` | **PASS** |
+| REQ-NF-006 | RAII for all dynamic resources | Every I2C/UART/socket/server/Wi-Fi handle is constructor-acquired and destructor-released; no raw `new`/`delete`; components held by `unique_ptr`. Verified by measurement, not inspection: the `[wifi_manager][hw]` case now runs three construct/init/destroy cycles and asserts they net to zero. It **found a violation** — `~WifiManager` released neither the default-wifi driver handlers, the default event loop nor NVS, leaking 11,428 bytes per cycle and failing every `init()` after the first with `ESP_ERR_INVALID_STATE`. Fixed and re-verified | **PASS** |
 | REQ-NF-007 | Zero warnings under `-Wall -Wextra` | Clean build, zero warnings; clang-tidy exits 0 | **PASS** |
 | REQ-NF-008 | All dev and CI on Linux | Ubuntu 24.04 native; CI on `ubuntu-latest` with `espressif/idf:v5.5` | **PASS** |
 
