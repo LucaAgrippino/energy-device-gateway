@@ -1,3 +1,5 @@
+#include <cmath>
+
 #include "Mpu9150.hpp"
 #include "driver/i2c_master.h"
 #include "unity.h"
@@ -34,7 +36,13 @@ TEST_CASE("MPU9150 init wakes device and passes WHO_AM_I probe", "[imu][hw]") {
     TEST_ESP_OK(i2c_del_master_bus(bus));
 }
 
-TEST_CASE("MPU9150 burst read reports ~1g on the stationary Z axis", "[imu][hw]") {
+TEST_CASE("MPU9150 burst read measures 1g total while stationary", "[imu][hw]") {
+    // Previously asserted accel_z ~ 9.81, which only holds with the board lying
+    // flat on the bench and failed whenever it was propped or on its side —
+    // a property of how the board was placed, not of the driver. The magnitude
+    // of the acceleration vector is 1g in *any* orientation while stationary,
+    // so it tests the same thing (device woken, range configured, all three
+    // axes scaled correctly) without depending on the bench.
     i2c_master_bus_handle_t bus = openTestBus();
     ImuReading reading;
     {
@@ -44,7 +52,12 @@ TEST_CASE("MPU9150 burst read reports ~1g on the stationary Z axis", "[imu][hw]"
     }  // destructor removes the device here, before the bus is deleted
     TEST_ESP_OK(i2c_del_master_bus(bus));
 
-    TEST_ASSERT_FLOAT_WITHIN(2.0f, 9.80665f, reading.accel_z);
+    const float magnitude = std::sqrt((reading.accel_x * reading.accel_x) +
+                                      (reading.accel_y * reading.accel_y) +
+                                      (reading.accel_z * reading.accel_z));
+    // +/-1.0 absorbs sensor noise and a small residual bias; a wrong scale
+    // factor or a dead axis moves this far further than that.
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 9.80665f, magnitude);
 }
 
 TEST_CASE("MPU9150 RAII: construct/destroy releases the I2C device cleanly", "[imu][hw]") {
