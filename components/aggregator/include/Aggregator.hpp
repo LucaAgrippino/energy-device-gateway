@@ -36,7 +36,11 @@ public:
     // read via esp_timer_get_time() internally, since esp_timer likewise has
     // no linked implementation on the "linux" target (header-only there).
     Snapshot collectSnapshot(int64_t now_us);
-    static Reading::Status checkStale(int64_t reading_ts, int64_t now, int64_t timeout);
+
+    // A predicate, not a Status: staleness is only one input to a reading's
+    // final status, which must also respect the error the producer reported
+    // (DESIGN.md §7).
+    [[nodiscard]] static bool isStale(int64_t reading_ts, int64_t now, int64_t timeout);
 
 private:
     std::vector<MailboxEntry> mailboxes_;

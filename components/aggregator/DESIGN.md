@@ -144,8 +144,11 @@ Snapshot Aggregator::collectSnapshot() {
 
         // Non-blocking peek — returns pdTRUE if mailbox has data
         if (xQueuePeek(entry.queue, &reading, 0) == pdTRUE) {
-            reading.status = checkStale(reading.timestamp, snap.timestamp,
-                                         entry.timeout_us);
+            // Staleness only downgrades; the producer's own status stands
+            // otherwise, so a device-reported ERROR survives to the dashboard.
+            if (isStale(reading.timestamp, snap.timestamp, entry.timeout_us)) {
+                reading.status = Reading::Status::TIMEOUT;
+            }
         } else {
             // Mailbox empty — no data ever received from this source
             reading.source = entry.name;
@@ -160,12 +163,8 @@ Snapshot Aggregator::collectSnapshot() {
     return snap;
 }
 
-Reading::Status Aggregator::checkStale(int64_t reading_ts, int64_t now,
-                                        int64_t timeout) const {
-    if (now - reading_ts > timeout) {
-        return Reading::Status::TIMEOUT;
-    }
-    return Reading::Status::OK;
+bool Aggregator::isStale(int64_t reading_ts, int64_t now, int64_t timeout) {
+    return now - reading_ts > timeout;
 }
 ```
 
@@ -229,6 +228,20 @@ endmenu
 |-------|-----------|----------|
 | Mailbox empty | `xQueuePeek` returns `pdFALSE` | Mark reading as TIMEOUT, value = 0 |
 | Stale reading | Timestamp older than timeout threshold | Set status to TIMEOUT, keep last known value |
+| Producer reported a failure | Reading arrives with `Status::ERROR` (e.g. `ModbusRtuDevice::allFailed`) | **Keep it.** Staleness may only downgrade a reading's status, never upgrade it — a fresh timestamp is not evidence of health, because a failing device republishes on every poll and so never appears stale |
+
+### Status Precedence
+
+A reading's final status is decided in this order:
+
+1. **Mailbox empty** → `TIMEOUT` (nothing has ever arrived from this source).
+2. **Stale** → `TIMEOUT` (not having heard from a source recently is a stronger
+   statement than whatever its last message happened to say).
+3. **Otherwise** → whatever the producer set: `OK`, or `ERROR`/`TIMEOUT` if the
+   device diagnosed its own failure.
+
+The aggregator never *raises* a status. It can only report the source's verdict
+or a worse one of its own.
 | Publisher not responding | `publish()` blocks if publisher mutex is held | Bounded by publisher task wakeup; aggregator doesn't block on publish |
 | Heap exhaustion | `snap.readings.push_back` throws `std::bad_alloc` | Unlikely — snapshot size is fixed and small (~10 readings) |
 

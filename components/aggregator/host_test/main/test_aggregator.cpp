@@ -60,6 +60,73 @@ TEST_CASE("Aggregator: stale reading reports TIMEOUT", "[aggregator]") {
     vQueueDelete(q);
 }
 
+// Regression: a device that diagnoses its own failure republishes on every poll
+// with a *fresh* timestamp, so it never looks stale. The aggregator used to
+// assign the freshness verdict straight into status, relabelling that ERROR as
+// OK — a dead Modbus slave then reached the dashboard as 0.000 with status OK,
+// indistinguishable from a healthy source reading zero.
+TEST_CASE("Aggregator: fresh reading keeps a producer-reported ERROR", "[aggregator]") {
+    QueueHandle_t q = makeMailbox();
+    Reading r{"modbus_tcp", 0.0f, 1000, Reading::Status::ERROR};
+    xQueueOverwrite(q, &r);
+
+    MockSink sink;
+    Aggregator agg({{q, "modbus_tcp", 500}}, sink);
+
+    Snapshot snap = agg.collectSnapshot(1200);  // fresh: within the 500 timeout
+
+    TEST_ASSERT_EQUAL(1, snap.readings.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Reading::Status::ERROR),
+                           static_cast<int>(snap.readings[0].status));
+
+    vQueueDelete(q);
+}
+
+TEST_CASE("Aggregator: fresh reading keeps a producer-reported TIMEOUT", "[aggregator]") {
+    // ModbusTcpTask publishes TIMEOUT while Wi-Fi is down, with a current
+    // timestamp. That must survive too, not be promoted to OK.
+    QueueHandle_t q = makeMailbox();
+    Reading r{"modbus_tcp", 0.0f, 1000, Reading::Status::TIMEOUT};
+    xQueueOverwrite(q, &r);
+
+    MockSink sink;
+    Aggregator agg({{q, "modbus_tcp", 500}}, sink);
+
+    Snapshot snap = agg.collectSnapshot(1200);
+
+    TEST_ASSERT_EQUAL(1, snap.readings.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Reading::Status::TIMEOUT),
+                           static_cast<int>(snap.readings[0].status));
+
+    vQueueDelete(q);
+}
+
+TEST_CASE("Aggregator: staleness downgrades an otherwise-OK reading only", "[aggregator]") {
+    // Staleness wins over the producer's OK, and an ERROR that has also gone
+    // stale reports TIMEOUT — silence is the more accurate description once a
+    // source stops publishing entirely.
+    QueueHandle_t q = makeMailbox();
+    Reading r{"modbus_rtu", 3.0f, 1000, Reading::Status::ERROR};
+    xQueueOverwrite(q, &r);
+
+    MockSink sink;
+    Aggregator agg({{q, "modbus_rtu", 500}}, sink);
+
+    Snapshot snap = agg.collectSnapshot(2000);  // stale: exceeds the 500 timeout
+
+    TEST_ASSERT_EQUAL(1, snap.readings.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Reading::Status::TIMEOUT),
+                           static_cast<int>(snap.readings[0].status));
+
+    vQueueDelete(q);
+}
+
+TEST_CASE("Aggregator: isStale is a boundary-inclusive predicate", "[aggregator]") {
+    // Exactly at the threshold is still fresh; one microsecond past is not.
+    TEST_ASSERT_FALSE(Aggregator::isStale(1000, 1500, 500));
+    TEST_ASSERT_TRUE(Aggregator::isStale(1000, 1501, 500));
+}
+
 TEST_CASE("Aggregator: empty mailbox reports TIMEOUT with value 0", "[aggregator]") {
     QueueHandle_t q = makeMailbox();  // never written to
 
