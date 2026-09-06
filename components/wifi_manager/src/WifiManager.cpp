@@ -42,10 +42,7 @@ WifiManager::WifiManager() : event_group_(xEventGroupCreate()) {}
 
 WifiManager::~WifiManager() {
     stopProvisioningServer();
-    if (sta_timeout_timer_ != nullptr) {
-        esp_timer_stop(sta_timeout_timer_);
-        esp_timer_delete(sta_timeout_timer_);
-    }
+    deleteStaTimeoutTimer();
     if (ap_sta_retry_timer_ != nullptr) {
         esp_timer_stop(ap_sta_retry_timer_);
         esp_timer_delete(ap_sta_retry_timer_);
@@ -66,8 +63,40 @@ WifiManager::~WifiManager() {
         ESP_LOGW(kTag, "esp_wifi_deinit failed: %s", esp_err_to_name(err));
     }
 
-    if (sta_netif_ != nullptr) esp_netif_destroy(sta_netif_);
-    if (ap_netif_ != nullptr) esp_netif_destroy(ap_netif_);
+    // esp_netif_destroy_default_wifi(), not esp_netif_destroy(). The netifs
+    // were made by esp_netif_create_default_wifi_sta()/_ap(), which — per
+    // esp_wifi_default.h — also "attaches the netif to wifi and registers wifi
+    // handlers to the default event loop". Only the _default_wifi form undoes
+    // that (it calls esp_wifi_clear_default_wifi_driver_and_handlers() first);
+    // the plain destroy leaves those registrations behind. Measured as an
+    // 11,428-byte leak per construct/init/destroy cycle by the wifi_manager
+    // RAII test, which is a REQ-NF-006 failure.
+    if (sta_netif_ != nullptr) esp_netif_destroy_default_wifi(sta_netif_);
+    if (ap_netif_ != nullptr) esp_netif_destroy_default_wifi(ap_netif_);
+
+    // init() creates the default event loop, so this object releases it —
+    // but only if it was the one that created it (see owns_event_loop_).
+    if (owns_event_loop_) {
+        esp_err_t loop_err = esp_event_loop_delete_default();
+        if (loop_err != ESP_OK) {
+            ESP_LOGW(kTag, "esp_event_loop_delete_default failed: %s",
+                     esp_err_to_name(loop_err));
+        }
+    }
+
+    // init() brought NVS up (it holds the station credentials), so release it
+    // here — but only if this object is the one that did. nvs_flash_init()
+    // returns ESP_OK whether or not NVS was already up, so ownership has to be
+    // tracked rather than inferred; without the flag, destroying a
+    // default-constructed WifiManager would tear down NVS for whoever else was
+    // using it.
+    if (nvs_initialised_) {
+        esp_err_t nvs_err = nvs_flash_deinit();
+        if (nvs_err != ESP_OK && nvs_err != ESP_ERR_NVS_NOT_INITIALIZED) {
+            ESP_LOGW(kTag, "nvs_flash_deinit failed: %s", esp_err_to_name(nvs_err));
+        }
+    }
+
     if (event_group_ != nullptr) vEventGroupDelete(event_group_);
 }
 
@@ -79,12 +108,21 @@ esp_err_t WifiManager::init() {
         err = nvs_flash_init();
     }
     if (err != ESP_OK) return err;
+    nvs_initialised_ = true;
 
     err = esp_netif_init();
     if (err != ESP_OK) return err;
 
+    // ESP_ERR_INVALID_STATE means the loop already exists — someone else owns
+    // it, so use it but do not delete it in the destructor. Anything else is a
+    // real failure. Previously any non-OK return aborted init(), which made a
+    // second WifiManager in the same process impossible to initialise.
     err = esp_event_loop_create_default();
-    if (err != ESP_OK) return err;
+    if (err == ESP_OK) {
+        owns_event_loop_ = true;
+    } else if (err != ESP_ERR_INVALID_STATE) {
+        return err;
+    }
 
     sta_netif_ = esp_netif_create_default_wifi_sta();
 
@@ -146,13 +184,36 @@ esp_err_t WifiManager::startSta(std::string_view ssid, std::string_view password
     state_ = State::CONNECTING;
     retry_count_ = 0;
 
+    // Any leftover timer from a previous attempt goes first: startSta() is also
+    // called from apStaRetryCallback() during AP-mode recovery, so it must be
+    // safe to run more than once without stranding a handle.
+    deleteStaTimeoutTimer();
+
     esp_timer_create_args_t timer_args{};
     timer_args.callback = &WifiManager::staTimeoutCallback;
     timer_args.arg = this;
     timer_args.name = "wifi_sta_timeout";
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &sta_timeout_timer_));
-    ESP_ERROR_CHECK(esp_timer_start_once(
-        sta_timeout_timer_, static_cast<uint64_t>(CONFIG_WIFI_STA_TIMEOUT_S) * 1000000ULL));
+
+    // Not ESP_ERROR_CHECK: this runs on the recovery path, and aborting the
+    // gateway because a watchdog timer could not be allocated is the same
+    // REQ-NF-001 mistake the IMU init once made. Without the timer there is no
+    // timeout-driven AP fallback, but the retry-exhausted path in
+    // handleWifiEvent() still reaches switchToAp().
+    esp_timer_handle_t timer = nullptr;
+    esp_err_t timer_err = esp_timer_create(&timer_args, &timer);
+    if (timer_err != ESP_OK) {
+        ESP_LOGE(kTag, "could not create the STA timeout timer: %s — AP fallback "
+                       "will depend on the retry counter alone",
+                 esp_err_to_name(timer_err));
+    } else {
+        sta_timeout_timer_.store(timer);
+        timer_err = esp_timer_start_once(
+            timer, static_cast<uint64_t>(CONFIG_WIFI_STA_TIMEOUT_S) * 1000000ULL);
+        if (timer_err != ESP_OK) {
+            ESP_LOGE(kTag, "could not arm the STA timeout timer: %s",
+                     esp_err_to_name(timer_err));
+        }
+    }
 
     // esp_wifi_connect() itself is triggered from handleWifiEvent() on
     // WIFI_EVENT_STA_START (DESIGN.md §5), once esp_wifi_start() brings the
@@ -307,11 +368,7 @@ void WifiManager::handleWifiEvent(int32_t event_id, void* /*event_data*/) {
 void WifiManager::handleIpEvent(int32_t event_id, void* event_data) {
     if (event_id != IP_EVENT_STA_GOT_IP) return;
 
-    if (sta_timeout_timer_ != nullptr) {
-        esp_timer_stop(sta_timeout_timer_);
-        esp_timer_delete(sta_timeout_timer_);
-        sta_timeout_timer_ = nullptr;
-    }
+    deleteStaTimeoutTimer();
 
     // Back on the network, so the AP-mode recovery loop has done its job.
     stopApStaRetryTimer();
@@ -324,12 +381,24 @@ void WifiManager::handleIpEvent(int32_t event_id, void* event_data) {
     ESP_LOGI(kTag, "connected, IP: " IPSTR, IP2STR(&event->ip_info.ip));
 }
 
-void WifiManager::switchToAp() {
-    if (sta_timeout_timer_ != nullptr) {
-        esp_timer_stop(sta_timeout_timer_);
-        esp_timer_delete(sta_timeout_timer_);
-        sta_timeout_timer_ = nullptr;
+void WifiManager::deleteStaTimeoutTimer() {
+    // The one-shot STA timeout is retired from two tasks: the default event
+    // loop task when IP_EVENT_STA_GOT_IP arrives, and the esp_timer task when
+    // the timeout itself expires and switchToAp() runs. If a connection
+    // completes in the same instant the timer fires, a plain
+    // null-check-then-delete lets both pass the check and hand the same handle
+    // to esp_timer_delete(), which queues one allocation to be freed twice.
+    // The exchange makes exactly one caller win; the loser sees nullptr.
+    esp_timer_handle_t timer = sta_timeout_timer_.exchange(nullptr);
+    if (timer == nullptr) {
+        return;
     }
+    esp_timer_stop(timer);
+    esp_timer_delete(timer);
+}
+
+void WifiManager::switchToAp() {
+    deleteStaTimeoutTimer();
     // STA is already running at this point; it must be stopped before the
     // driver can be reconfigured into AP mode.
     esp_wifi_stop();
@@ -437,18 +506,28 @@ esp_err_t WifiManager::startProvisioningServer() {
         return err;
     }
 
+    // Not ESP_ERROR_CHECK: startAp() documents a provisioning-server failure as
+    // non-fatal and logs it, but an abort here never lets it reach that branch.
+    // Unwind to the same state a failed httpd_start() leaves behind instead.
     httpd_uri_t root_uri{};
     root_uri.uri = "/";
     root_uri.method = HTTP_GET;
     root_uri.handler = provisionRootHandler;
-    ESP_ERROR_CHECK(httpd_register_uri_handler(provisioning_server_, &root_uri));
+    err = httpd_register_uri_handler(provisioning_server_, &root_uri);
 
-    httpd_uri_t save_uri{};
-    save_uri.uri = "/save";
-    save_uri.method = HTTP_POST;
-    save_uri.handler = provisionSaveHandler;
-    save_uri.user_ctx = this;
-    ESP_ERROR_CHECK(httpd_register_uri_handler(provisioning_server_, &save_uri));
+    if (err == ESP_OK) {
+        httpd_uri_t save_uri{};
+        save_uri.uri = "/save";
+        save_uri.method = HTTP_POST;
+        save_uri.handler = provisionSaveHandler;
+        save_uri.user_ctx = this;
+        err = httpd_register_uri_handler(provisioning_server_, &save_uri);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "could not register a provisioning handler: %s", esp_err_to_name(err));
+        stopProvisioningServer();
+        return err;
+    }
 
     ESP_LOGI(kTag, "provisioning server listening on port %d", CONFIG_WIFI_PROVISION_PORT);
     return ESP_OK;
