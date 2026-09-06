@@ -19,11 +19,15 @@ implementation, and tests at unit, integration, system and acceptance level.
 | `wifi_manager` | `wifi_manager-v1.2` | Yes — STA, AP fallback, NVS provisioning, outage recovery |
 | `aggregator` | `aggregator-v1.1` | Yes |
 | `publisher` | `publisher-v1.1` | Yes — dashboard + `/ws` + latency measured |
-| `modbus_device` (TCP) | `modbus_device-v1.1` | Yes — against a pymodbus slave |
-| `modbus_device` (RTU) | `modbus_device-v1.0` | Yes — over real RS-485 to a pymodbus slave |
+| `modbus_device` | `modbus_device-v1.2` | Yes — TCP against a pymodbus slave, RTU over real RS-485 |
 | `health` | `health-v1.0` | Yes — `/health` |
 
-On-target unit tests: **20 passing, 0 failing**.
+On-target unit tests: **25 cases** across the five components with a `test/`
+directory — imu 4, modbus_device 10, health 6, publisher 3, wifi_manager 2.
+The 20 in imu, modbus_device and health have been run on hardware and all pass;
+publisher's and wifi_manager's 5 compile into the test app but have not yet been
+executed on the board. Host tests: **9 cases** for the aggregator on the linux
+target, all passing.
 System tests: **8 of 8 have passed**. ST-001 and ST-007 require the IMU's ground
 connected — see the hardware note in [docs/acceptance_results.md](docs/acceptance_results.md).
 See [docs/day7_system_test_plan.md](docs/day7_system_test_plan.md).
@@ -118,9 +122,10 @@ A telemetry frame carries every source in one snapshot, each reading tagged
 ## Testing
 
 ```bash
-# On-target unit tests (imu, modbus_device, health)
+# On-target unit tests — all five components that have a test/ directory.
+# Omitting any -T silently drops its cases from the run rather than failing.
 cd $IDF_PATH/tools/unit-test-app
-idf.py -T imu -T modbus_device -T health \
+idf.py -T imu -T modbus_device -T health -T publisher -T wifi_manager \
        -D EXTRA_COMPONENT_DIRS=<repo>/components \
        -D SDKCONFIG_DEFAULTS="$PWD/sdkconfig.defaults;<repo>/sdkconfig.defaults" \
        build flash monitor

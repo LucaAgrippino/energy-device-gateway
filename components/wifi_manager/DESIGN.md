@@ -140,7 +140,31 @@ private:
 | `init()` | Init NVS, TCP/IP, event loop, Wi-Fi driver, register handlers | `nvs_flash_init()`, `esp_netif_init()`, `esp_event_loop_create_default()`, `esp_wifi_init()`, `esp_event_handler_instance_register()` |
 | `startSta()` | Configure STA mode, start, connect | `esp_wifi_set_mode()`, `esp_wifi_set_config()`, `esp_wifi_start()`, `esp_wifi_connect()` |
 | `startAp()` | Configure AP mode, start | `esp_wifi_set_mode(WIFI_MODE_AP)`, `esp_wifi_set_config()`, `esp_wifi_start()` |
-| Destructor | Unregister handlers, stop Wi-Fi, destroy netif, delete event group | `esp_event_handler_instance_unregister()`, `esp_wifi_stop()`, `esp_wifi_deinit()`, `esp_netif_destroy()`, `vEventGroupDelete()` |
+| Destructor | Unregister handlers, stop Wi-Fi, destroy netifs, delete the event loop, release NVS, delete event group | `esp_event_handler_instance_unregister()`, `esp_wifi_stop()`, `esp_wifi_deinit()`, `esp_netif_destroy_default_wifi()`, `esp_event_loop_delete_default()`, `nvs_flash_deinit()`, `vEventGroupDelete()` |
+
+**Corrected after testing.** This row originally listed only
+`esp_netif_destroy()` and released neither the default event loop nor NVS, so
+the destructor did not undo what `init()` did. The `[wifi_manager][hw]` RAII
+case measured it: **11,428 bytes leaked per cycle**, and every `init()` after
+the first returned `ESP_ERR_INVALID_STATE`, because
+`esp_event_loop_create_default()` kept finding a loop nobody had deleted.
+
+Three points the corrected sequence depends on:
+
+- `esp_netif_create_default_wifi_sta()` also "attaches the netif to wifi and
+  registers wifi handlers to the default event loop" (`esp_wifi_default.h`).
+  Only `esp_netif_destroy_default_wifi()` undoes that — it calls
+  `esp_wifi_clear_default_wifi_driver_and_handlers()` first. Plain
+  `esp_netif_destroy()` leaves the registrations behind.
+- The event loop and NVS are released **only if this object created them**
+  (`owns_event_loop_`, `nvs_initialised_`). RAII releases what it took and
+  nothing more; a default-constructed `WifiManager` must not tear down NVS for
+  whoever else is using it.
+- `esp_netif_init()` has no counterpart. `esp_netif_deinit()` returns
+  `ESP_ERR_NOT_SUPPORTED` once lwIP is running — "deinit of LwIP not supported"
+  (`esp_netif/lwip/esp_netif_lwip.c`). That one-time cost, measured at 5,684
+  bytes, is the platform's and is excluded from the test's measurement window
+  rather than attributed to this class.
 
 ### Init Sequence (in order)
 

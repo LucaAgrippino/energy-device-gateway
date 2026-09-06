@@ -14,10 +14,24 @@ constexpr const char* kTag = "ModbusTcpTask";
 // Publish a full set of TIMEOUT readings so the dashboard shows the source as
 // unavailable while Wi-Fi is down, rather than freezing on the last good value
 // until the aggregator's own stale timeout eventually trips.
+//
+// The source name is carried over from what is already in the mailbox rather
+// than written here. This task holds mailboxes, not the register map, so a
+// literal labelled every entry "modbus_tcp" — collapsing five distinct sources
+// into one name the moment the link dropped, and losing the ".voltage" suffix
+// the dashboard and tools/test both key off. A mailbox that has never been
+// written is left untouched, so the aggregator supplies the correct name from
+// its own MailboxEntry via the empty-mailbox path (aggregator DESIGN.md §7).
 void publishUnavailable(const ModbusTcpTaskContext& ctx) {
     const int64_t now = esp_timer_get_time();
     for (auto* mailbox : ctx.mailboxes) {
-        Reading reading{"modbus_tcp", 0.0F, now, Reading::Status::TIMEOUT};
+        Reading reading;
+        if (xQueuePeek(mailbox, &reading, 0) != pdTRUE) {
+            continue;
+        }
+        reading.value = 0.0F;
+        reading.timestamp = now;
+        reading.status = Reading::Status::TIMEOUT;
         xQueueOverwrite(mailbox, &reading);
     }
 }

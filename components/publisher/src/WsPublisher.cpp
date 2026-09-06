@@ -29,20 +29,30 @@ esp_err_t WsPublisher::start() {
         return err;
     }
 
+    // Not ESP_ERROR_CHECK: app_main and DESIGN.md §10 both treat a publisher
+    // that fails to start as non-fatal — sensors keep running, only the
+    // dashboard is lost — and an abort here would deny them that choice.
     httpd_uri_t ws_uri{};
     ws_uri.uri = "/ws";
     ws_uri.method = HTTP_GET;
     ws_uri.handler = wsHandler;
     ws_uri.user_ctx = this;
     ws_uri.is_websocket = true;
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &ws_uri));
+    err = httpd_register_uri_handler(server_, &ws_uri);
 
-    httpd_uri_t dash_uri{};
-    dash_uri.uri = "/";
-    dash_uri.method = HTTP_GET;
-    dash_uri.handler = dashboardHandler;
-    dash_uri.user_ctx = nullptr;
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &dash_uri));
+    if (err == ESP_OK) {
+        httpd_uri_t dash_uri{};
+        dash_uri.uri = "/";
+        dash_uri.method = HTTP_GET;
+        dash_uri.handler = dashboardHandler;
+        dash_uri.user_ctx = nullptr;
+        err = httpd_register_uri_handler(server_, &dash_uri);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "could not register a URI handler: %s", esp_err_to_name(err));
+        stop();
+        return err;
+    }
 
     return ESP_OK;
 }

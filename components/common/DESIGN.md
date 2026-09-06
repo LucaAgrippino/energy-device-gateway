@@ -142,9 +142,21 @@ components/common/
 ├── include/
 │   ├── Reading.hpp
 │   ├── Snapshot.hpp
-│   └── DeviceConfig.hpp
+│   └── ISnapshotSink.hpp
 └── CMakeLists.txt
 ```
+
+Two deviations from the sketch above, both deliberate:
+
+- **`ISnapshotSink.hpp` was added.** `Aggregator` must not include
+  `WsPublisher.hpp`, which pulls in `esp_http_server` — a component with no
+  `linux` target port, which would make the aggregator impossible to
+  host-test (§9 of the aggregator design). The interface is the seam.
+- **`DeviceConfig.hpp` (§4) was never built.** Each driver takes its
+  configuration as constructor arguments read from Kconfig in `app_main`
+  instead. Introducing the structs now would rewrite three constructors that
+  are already hardware-validated, for no behavioural change; it is recorded as
+  an open decision in `STATE.md` rather than quietly dropped.
 
 ### CMakeLists.txt
 

@@ -29,6 +29,10 @@ private:
     i2c_master_bus_handle_t bus_;
     uint8_t addr_;
 
+    // Result of attaching the device in the constructor, replayed by init()
+    // since a constructor has no way to report it.
+    esp_err_t dev_add_err_{ESP_OK};
+
     // Last known-good reading, held back on I2C read failure (DESIGN.md §7:
     // "I2C NACK / timeout" -> "log warning, return stale/error reading").
     ImuReading last_reading_{};
