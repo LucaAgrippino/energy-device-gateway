@@ -21,6 +21,18 @@ menu "Wi-Fi Manager Configuration"
         default 1
         range 1 13
 
+    config WIFI_POWER_SAVE
+        bool "Enable Wi-Fi modem power save (WIFI_PS_MIN_MODEM)"
+        default n
+        help
+            ESP-IDF's own default is WIFI_PS_MIN_MODEM, which sleeps the radio
+            between DTIM beacons and adds a latency tail measured at hundreds
+            of milliseconds — enough to breach REQ-NF-004 (telemetry to
+            browser within 500 ms) on this workload. The gateway is
+            mains-powered, so this defaults to off. Turn it on for a
+            battery-powered build where current draw matters more than
+            telemetry latency.
+
     config WIFI_PROVISION_PORT
         int "Provisioning HTTP server port (AP mode)"
         default 8080
