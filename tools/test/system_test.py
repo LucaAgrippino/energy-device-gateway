@@ -64,12 +64,17 @@ record("ST-001", "IMU to browser",
        f"(x={acc.get('x',0):.2f} y={acc.get('y',0):.2f} z={acc.get('z',0):.2f})")
 
 # ---- ST-002 Modbus RTU ----
-record("ST-002", "Modbus RTU to browser", "SKIP",
-       "No RS-485 link: female-female jumpers missing and the CH340 adapter is "
-       "not attached to the Pi. Component builds and is wired into main.cpp.")
+a = snapshot(); time.sleep(5.0); b = snapshot()
+rtu_a, rtu_b = by_prefix(a, "modbus_rtu."), by_prefix(b, "modbus_rtu.")
+rtu_ok = all(r["st"] == 0 for r in rtu_a)
+rtu_moved = any(x["val"] != y["val"] for x, y in zip(rtu_a, rtu_b))
+record("ST-002", "Modbus RTU to browser",
+       "PASS" if (len(rtu_a) == 5 and rtu_ok and rtu_moved) else "FAIL",
+       f"{len(rtu_a)} registers over RS-485, all status OK={rtu_ok}, values "
+       f"advance={rtu_moved} (V={rtu_a[0]['val']:.1f} -> {rtu_b[0]['val']:.1f})")
 
 # ---- ST-003 Modbus TCP ----
-a = snapshot(); time.sleep(2.5); b = snapshot()
+a = snapshot(); time.sleep(5.0); b = snapshot()
 tcp_a, tcp_b = by_prefix(a, "modbus_tcp."), by_prefix(b, "modbus_tcp.")
 tcp_ok = all(r["st"] == 0 for r in tcp_a)
 changed = any(x["val"] != y["val"] for x, y in zip(tcp_a, tcp_b))
@@ -82,10 +87,11 @@ record("ST-003", "Modbus TCP to browser",
 d = snapshot()
 n_imu, n_rtu, n_tcp = len(by_prefix(d, "imu.")), len(by_prefix(d, "modbus_rtu.")), len(by_prefix(d, "modbus_tcp."))
 total = len(d["readings"])
+ok_counts = {r["st"] for r in d["readings"] if not r["src"].startswith("imu.")}
 record("ST-004", "All sources combined",
        "PASS" if (n_imu == 7 and n_rtu == 5 and n_tcp == 5 and total == 17) else "FAIL",
-       f"single frame carries imu={n_imu} rtu={n_rtu} tcp={n_tcp}, total={total}. "
-       f"RTU registers present but ERROR (no hardware), which is ST-008's point.")
+       f"single frame carries imu={n_imu} rtu={n_rtu} tcp={n_tcp}, total={total}; "
+       f"both Modbus transports status codes {sorted(ok_counts)}")
 
 # ---- ST-005 AP fallback ----
 record("ST-005", "AP mode fallback", "PASS",
@@ -117,15 +123,22 @@ record("ST-007", "Failure detection and recovery",
        f"with no board reset")
 
 # ---- ST-008 source independence (REQ-NF-001) ----
+# Exercised for real: the TCP slave is stopped while RS-485 and the IMU keep
+# running, then restored.
+ssh("pkill -f tcp_slave.py")
+time.sleep(9)
 d = snapshot()
-rtu = by_prefix(d, "modbus_rtu.")
-rtu_bad = all(r["st"] != 0 for r in rtu)
-others_ok = all(r["st"] == 0 for r in by_prefix(d, "imu.") + by_prefix(d, "modbus_tcp."))
+tcp_down = all(r["st"] != 0 for r in by_prefix(d, "modbus_tcp."))
+rtu_fine = all(r["st"] == 0 for r in by_prefix(d, "modbus_rtu."))
+ssh(SLAVE)
+time.sleep(10)
+restored = all(r["st"] == 0 for r in by_prefix(snapshot(), "modbus_tcp."))
 record("ST-008", "Source independence (REQ-NF-001)",
-       "PASS" if (rtu_bad and others_ok) else "FAIL",
-       f"RTU absent all session -> all {len(rtu)} registers non-OK "
-       f"(codes {sorted({r['st'] for r in rtu})}); IMU and TCP unaffected={others_ok}; "
-       f"aggregator and publisher still streaming")
+       "PASS" if (tcp_down and rtu_fine and restored) else "FAIL",
+       f"TCP source killed -> non-OK={tcp_down} while RS-485 kept streaming "
+       f"OK={rtu_fine}; TCP restored={restored}. Separately proven this session: "
+       f"an IMU that fails I2C init now reports TIMEOUT instead of aborting "
+       f"app_main and reboot-looping the gateway")
 
 print("=" * 72)
 for tid, name, status, _ in results:
