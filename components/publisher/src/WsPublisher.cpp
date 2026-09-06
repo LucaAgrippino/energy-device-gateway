@@ -140,22 +140,38 @@ void WsPublisher::publish(Snapshot&& snapshot) {
 }
 
 std::string WsPublisher::snapshotToJson(const Snapshot& snap) {
-    char buf[512];
-    int pos = 0;
+    // Built by appending rather than into a fixed buffer: snprintf reports the
+    // length it *would* have written, so a running offset silently walks past
+    // the end of a stack array once the snapshot outgrows it, and
+    // `sizeof(buf) - pos` then wraps (size_t vs int) into a huge length. The
+    // snapshot grows every time a component is added — it crossed 512 bytes
+    // when modbus_tcp brought it to 17 readings — so the size must not be a
+    // standing constraint.
+    std::string out;
+    // ~56 bytes covers the longest entry today (modbus_tcp.energy_total); a low
+    // estimate only costs a reallocation, never correctness.
+    out.reserve(64 + (snap.readings.size() * 56));
 
-    pos += snprintf(buf + pos, sizeof(buf) - pos,
-        R"({"ts":%lld,"readings":[)", static_cast<long long>(snap.timestamp));
+    char header[48];
+    snprintf(header, sizeof(header), R"({"ts":%lld,"readings":[)",
+             static_cast<long long>(snap.timestamp));
+    out += header;
 
     for (size_t i = 0; i < snap.readings.size(); i++) {
         const auto& r = snap.readings[i];
-        if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ",");
-        pos += snprintf(buf + pos, sizeof(buf) - pos,
-            R"({"src":"%.*s","val":%.3f,"st":%d})",
-            static_cast<int>(r.source.length()), r.source.data(),
-            static_cast<double>(r.value),
-            static_cast<int>(r.status));
+        if (i > 0) {
+            out += ',';
+        }
+        // Bounded by construction: source is a string_view over a literal and
+        // the numeric fields have fixed widths, so one entry cannot exceed this.
+        char entry[96];
+        snprintf(entry, sizeof(entry), R"({"src":"%.*s","val":%.3f,"st":%d})",
+                 static_cast<int>(r.source.length()), r.source.data(),
+                 static_cast<double>(r.value),
+                 static_cast<int>(r.status));
+        out += entry;
     }
 
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "]}");
-    return {buf, static_cast<size_t>(pos)};
+    out += "]}";
+    return out;
 }
