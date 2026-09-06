@@ -118,6 +118,27 @@ esp_err_t WifiManager::startSta(std::string_view ssid, std::string_view password
     err = esp_wifi_start();
     if (err != ESP_OK) return err;
 
+    // ESP-IDF defaults to WIFI_PS_MIN_MODEM, which parks the radio between
+    // DTIM beacons. That barely moves the median snapshot-to-browser latency
+    // (49 ms vs 54 ms) but dominates the tail, which is what REQ-NF-004's
+    // 500 ms ceiling actually constrains:
+    //
+    //   power save on   p95 391 ms   max 492 ms   (1.6% margin)
+    //   power save off  p95 243 ms   max 287 ms   (42.5% margin)
+    //
+    // Both pass, so this is margin rather than a defect fix — but 8 ms of
+    // headroom is one missed beacon from breaching. The gateway is
+    // mains-powered, so modem sleep buys nothing here; CONFIG_WIFI_POWER_SAVE
+    // restores it for a battery build.
+#if CONFIG_WIFI_POWER_SAVE
+    err = esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+#else
+    err = esp_wifi_set_ps(WIFI_PS_NONE);
+#endif
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "could not set Wi-Fi power save mode: %s", esp_err_to_name(err));
+    }
+
     state_ = State::CONNECTING;
     retry_count_ = 0;
 
