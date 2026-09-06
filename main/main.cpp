@@ -142,7 +142,20 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &bus));
 
     g_imu = std::make_unique<Mpu9150>(bus, kImuAddr);
-    ESP_ERROR_CHECK(g_imu->init());
+
+    // REQ-NF-001: "an unresponsive sensor ... shall not block other data
+    // sources or the publisher". This was ESP_ERROR_CHECK, which aborts and
+    // reboot-loops the gateway when the IMU does not answer on I2C — taking
+    // both Modbus transports, the aggregator, the publisher and the dashboard
+    // down with it. A single nudged jumper did exactly that on the bench.
+    // Handled the same way as a missing RS-485 adapter instead: log it, skip
+    // the task, and let those mailboxes stay empty so the aggregator reports
+    // imu.* as TIMEOUT (aggregator DESIGN.md §7) while everything else runs.
+    const esp_err_t imu_err = g_imu->init();
+    if (imu_err != ESP_OK) {
+        ESP_LOGE(kTag, "IMU init failed: %s — imu.* will report TIMEOUT, "
+                       "other sources unaffected", esp_err_to_name(imu_err));
+    }
 
     g_imu_ctx.imu = g_imu.get();
     g_imu_ctx.accel_x_mailbox = xQueueCreate(1, sizeof(Reading));
@@ -153,8 +166,12 @@ extern "C" void app_main(void) {
     g_imu_ctx.gyro_z_mailbox = xQueueCreate(1, sizeof(Reading));
     g_imu_ctx.temp_mailbox = xQueueCreate(1, sizeof(Reading));
 
-    xTaskCreate(imuTask, "imu_task", kImuTaskStackBytes, &g_imu_ctx, kImuTaskPriority,
-                &g_imu_task);
+    // Mailboxes are created either way: the aggregator peeks all of them, and
+    // an empty one is exactly how a never-reporting source is meant to surface.
+    if (imu_err == ESP_OK) {
+        xTaskCreate(imuTask, "imu_task", kImuTaskStackBytes, &g_imu_ctx, kImuTaskPriority,
+                    &g_imu_task);
+    }
 
     // One mailbox per RTU register, in register-map order (modbus_device
     // DESIGN.md §10, fanned out the same way as the IMU rather than shipping a

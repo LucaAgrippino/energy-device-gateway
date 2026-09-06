@@ -2,8 +2,10 @@
 
 **Target:** ESP32-S3-DevKitC-1 (16 MB flash, no PSRAM enabled)
 **Firmware:** `main` @ `97610e4`, ESP-IDF v5.5.5
-**Measured:** 2026-09-06, board running all tasks with Wi-Fi connected, Modbus TCP
-polling a live slave, and one WebSocket client attached.
+**Measured:** 2026-09-06, board running all tasks with Wi-Fi connected, **all three
+sources live** (IMU on I2C, Modbus RTU over RS-485, Modbus TCP over Wi-Fi), and a
+WebSocket client attached. Re-measured after the RS-485 bus was wired; the earlier
+figures were taken with RTU failing every poll.
 
 Covers **REQ-NF-002** (≤ 80% heap at steady state) and **REQ-NF-003** (≥ 25% stack
 headroom per task).
@@ -71,11 +73,12 @@ Measured at runtime from `/health`, which reports
 | Metric | Bytes | % of heap |
 |---|---:|---:|
 | Total heap | 345,436 | 100% |
-| Free now | 226,232 | 65.5% used → **34.5%** |
-| Minimum ever free | 221,300 | **35.9% used at peak** |
+| Free now | 225,980 | **34.6% used** |
+| Minimum ever free | 190,860 | **44.7% used at peak** |
 
-**REQ-NF-002 (≤ 80% used): PASS** — peak usage 35.9%, i.e. 44 percentage points
-of margin. The worst point sits 152,024 bytes below the limit.
+**REQ-NF-002 (≤ 80% used): PASS** — peak usage 44.7%, i.e. 35 percentage points
+of margin. Peak rose from 35.9% once RS-485 began decoding real responses rather
+than timing out, which is the honest steady-state figure.
 
 > The heap total reported at runtime is not the same quantity as the "DIRAM
 > remaining" row in §2. `idf.py size` reports link-time section usage against the
@@ -100,30 +103,33 @@ which returns words — confirmed in
 
 | Task | Stack | HWM (free) | Headroom | Verdict |
 |---|---:|---:|---:|---|
-| `imu` | 4,096 | 2,804 | 68.5% | PASS |
-| `modbus_rtu` | 4,096 | 1,724 | 42.1% | PASS |
-| `modbus_tcp` | 4,096 | 1,976 | 48.2% | PASS |
-| `aggregator` | 4,096 | 3,092 | 75.5% | PASS |
-| `publisher` | 6,144 | 3,912 | 63.7% | PASS |
-| `health` | 4,096 | 1,996 | 48.7% | PASS |
+| `imu` | 4,096 | 2,764 | 67.5% | PASS |
+| `modbus_rtu` | 4,096 | 2,676 | 65.3% | PASS |
+| `modbus_tcp` | 4,096 | 1,568 | 38.3% | PASS |
+| `aggregator` | 4,096 | 3,100 | 75.7% | PASS |
+| `publisher` | 6,144 | 3,824 | 62.2% | PASS |
+| `health` | 4,096 | 1,988 | 48.5% | PASS |
 
 **REQ-NF-003 (≥ 25% headroom): PASS** — every task clears the target, the tightest
-being `modbus_rtu` at 42.1%.
+being `modbus_tcp` at 38.3%.
 
-Total stack allocation is 26,624 bytes; peak combined usage is 11,120 bytes.
+Total stack allocation is 26,624 bytes; peak combined usage is 11,704 bytes.
 
 ### Notes on individual tasks
 
-- **`modbus_rtu` (42.1%, the tightest)** was measured with no RS-485 hardware
-  attached, so it times out on every poll and never walks the response-decoding
-  path. Re-measure once the RS-485 bus is wired; the decode path adds a response
-  buffer and the per-register `Reading` vector.
+- **`modbus_rtu` improved from 42.1% to 65.3%** once the bus was wired. That is
+  not a typo: the failure path is the *more* expensive one. A timed-out poll
+  still builds a full `allFailed()` vector of five `Reading`s after the UART
+  read has already used its buffers, whereas a successful decode reuses the
+  response buffer it already holds.
 - **`publisher` (63.7%)** carries the largest absolute usage at 2,232 bytes,
   which is expected — it builds the snapshot JSON and drives `httpd_ws_send_data`
   for every connected client. Its 6,144-byte stack is already the largest, and
   the headroom confirms that was the right call.
-- **`aggregator` (75.5%)** is the roomiest despite touching every mailbox,
+- **`aggregator` (75.7%)** is the roomiest despite touching every mailbox,
   because it only moves POD `Reading` structs and does no formatting.
+- **`modbus_tcp` (38.3%, now the tightest)** holds a 264-byte response buffer
+  plus the lwIP socket path, which is deeper than the UART one.
 
 ---
 
@@ -131,12 +137,8 @@ Total stack allocation is 26,624 bytes; peak combined usage is 11,120 bytes.
 
 | Requirement | Target | Measured | Result |
 |---|---|---|---|
-| REQ-NF-002 | ≤ 80% heap | 35.9% peak | **PASS** |
-| REQ-NF-003 | ≥ 25% stack headroom | 42.1% worst | **PASS** |
+| REQ-NF-002 | ≤ 80% heap | 44.7% peak | **PASS** |
+| REQ-NF-003 | ≥ 25% stack headroom | 38.3% worst | **PASS** |
 
-Both pass with wide margin. No stack needs resizing, and there is room for the
-`health` component's task and any future source without revisiting the budget.
-
-**Caveat:** these figures were taken with the Modbus RTU transport failing (no
-hardware). RTU is the one path never exercised end to end, so its stack figure
-is a floor rather than a true worst case.
+Both pass with wide margin, and unlike the earlier revision these are true
+steady-state figures: every source was live and healthy when they were taken.

@@ -20,11 +20,11 @@ implementation, and tests at unit, integration, system and acceptance level.
 | `aggregator` | `aggregator-v1.1` | Yes |
 | `publisher` | `publisher-v1.1` | Yes — dashboard + `/ws` + latency measured |
 | `modbus_device` (TCP) | `modbus_device-v1.1` | Yes — against a pymodbus slave |
-| `modbus_device` (RTU) | `modbus_device-v1.0` | **No** — awaiting RS-485 wiring |
+| `modbus_device` (RTU) | `modbus_device-v1.0` | Yes — over real RS-485 to a pymodbus slave |
 | `health` | `health-v1.0` | Yes — `/health` |
 
 On-target unit tests: **20 passing, 0 failing**.
-System tests: **6 passing, 2 skipped** (both blocked on hardware/router access).
+System tests: **7 passing, 1 skipped** (Wi-Fi reconnect needs router access).
 See [docs/day7_system_test_plan.md](docs/day7_system_test_plan.md).
 
 ---
@@ -161,9 +161,6 @@ these simulators depend on. See `tools/pymodbus_slave/requirements.txt`.
 
 ## Known limitations
 
-- **Modbus RTU has never run against real hardware.** The component builds, is
-  wired into `app_main`, and its CRC and framing logic are unit-tested, but the
-  RS-485 bus is not physically connected. Those registers report `ERROR`.
 - **Wi-Fi reconnect after losing an established link** is untested; AP fallback
   and first-connect retry are both verified.
 - 2.4 GHz only, as the ESP32-S3 radio has no 5 GHz support.
