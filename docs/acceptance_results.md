@@ -20,7 +20,7 @@ running `tcp_slave.py`; both on the same 2.4 GHz BSS. **No RS-485 hardware.**
 | REQ-F-002 | MPU6050-compatible IMUs via `IImu` | `Mpu9150 : IImu`; on-target WHO_AM_I probe and scaling tests pass | **PASS** |
 | REQ-F-003 | Wi-Fi STA using NVS credentials | Board joined `VM0898060` in 2.9 s, took `192.168.0.105` | **PASS** |
 | REQ-F-004 | AP fallback on STA failure | ST-005: 5 retries → `falling back to AP mode` → `EDG-Setup` visible and joinable | **PASS** |
-| REQ-F-005 | `/ws` streams JSON telemetry | ST-001/003/004: valid JSON, 17 readings, every 500 ms | **PASS** |
+| REQ-F-005 | `/ws` streams JSON telemetry | ST-001/003/004: valid JSON, 17 readings, every 500 ms. `publisher_test.py`: 4 concurrent clients receive the identical snapshot; reconnect after a 3 s absence resumes in 334 ms; publisher survives 5 clients dropping mid-broadcast | **PASS** |
 | REQ-F-006 | Modbus RTU holding registers over RS-485 | **No RS-485 hardware.** CRC-16, framing and scaling unit-tested on target; transport never exercised | **BLOCKED** |
 | REQ-F-007 | Modbus TCP holding registers over Wi-Fi | ST-003: decoded values identical to the simulator's ground truth at the same instant | **PASS** |
 | REQ-F-008 | Aggregate readings into periodic snapshots | ST-004: one frame carries imu 7 + rtu 5 + tcp 5 = 17 | **PASS** |
