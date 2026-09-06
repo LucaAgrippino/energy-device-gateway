@@ -1,0 +1,19 @@
+menu "Health Monitor Configuration"
+
+    config HEALTH_PERIOD_MS
+        int "Health check period (ms)"
+        default 5000
+        range 1000 30000
+        help
+            How often the health task logs heap and per-task stack
+            high-water marks to serial. The /health endpoint is served on
+            demand and is unaffected by this period.
+
+    config HEALTH_LOG_TO_SERIAL
+        bool "Log health data to serial"
+        default y
+        help
+            Useful during development. Turning this off leaves the /health
+            endpoint working but silences the periodic log.
+
+endmenu
