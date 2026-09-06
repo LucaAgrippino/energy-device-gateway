@@ -9,7 +9,10 @@ against the running system.
 running `tcp_slave.py` and `rtu_slave.py`; both on the same 2.4 GHz BSS. RS-485 bus
 wired ESP32 ↔ CH340 adapter over Cat6.
 
-**Result: 19 of 20 requirements PASS, 1 BLOCKED, 0 FAIL.**
+**Result: 20 of 20 requirements PASS, 0 BLOCKED, 0 FAIL.**
+
+Two defects were found and fixed in the course of verifying them (REQ-NF-001 and
+REQ-NF-005); both are re-verified above.
 
 ---
 
@@ -38,34 +41,46 @@ wired ESP32 ↔ CH340 adapter over Cat6.
 | REQ-NF-002 | ≤ 80% heap at steady state | Peak 35.9% used (221,300 free of 345,436) | **PASS** |
 | REQ-NF-003 | ≥ 25% stack headroom per task | Worst is `modbus_rtu` at 42.1%; all six tasks pass | **PASS** |
 | REQ-NF-004 | WebSocket latency ≤ 500 ms | median 55 ms, p95 275 ms, max 413 ms | **PASS** |
-| REQ-NF-005 | Recover from Wi-Fi disconnect without reboot | Needs the AP taken down and restored — no router access, board can't be moved remotely | **BLOCKED** |
+| REQ-NF-005 | Recover from Wi-Fi disconnect without reboot | ST-006: 45 s AP outage → retries → AP fallback → AP-mode retry timer → reconnected, no reset. **Found and fixed a real defect**: `AP_MODE` was terminal, so any outage beyond ~12 s stranded the gateway until a human intervened | **PASS** |
 | REQ-NF-006 | RAII for all dynamic resources | Every I2C/UART/socket/server/Wi-Fi handle is constructor-acquired and destructor-released; no raw `new`/`delete`; components held by `unique_ptr` | **PASS** |
 | REQ-NF-007 | Zero warnings under `-Wall -Wextra` | Clean build, zero warnings; clang-tidy exits 0 | **PASS** |
 | REQ-NF-008 | All dev and CI on Linux | Ubuntu 24.04 native; CI on `ubuntu-latest` with `espressif/idf:v5.5` | **PASS** |
 
 ---
 
-## The one blocked item
+## How REQ-NF-005 was tested
 
-**REQ-NF-005 — Wi-Fi reconnect.** The *first-connect* retry path is verified
-(5 attempts then AP fallback, ST-005), and so is recovery of a dependent service
-(ST-007: the TCP slave died and came back with no board reset). What is untested
-is losing an already-established association. Triggering it means power-cycling
-the router or moving the board out of range — neither available remotely.
+The router could not be power-cycled and the board could not be moved out of
+range, so a controlled AP was built instead: the Pi was put on `VM0898060` and
+made to route the notebook's traffic over the existing Ethernet link, which
+freed the notebook's radio to serve a 2.4 GHz AP the board joined. The AP could
+then be dropped and restored on command with the serial log captured throughout,
+and the notebook stayed online the whole time.
 
-To close it: with the dashboard open, power-cycle the Wi-Fi router; expect serial
-to show `STA disconnected, retry n/5` then a reconnect and a new IP, with
-`modbus_tcp.*` going non-OK during the outage and recovering after — and no
-reboot.
+That rig is what exposed the defect. A 25 s outage left the board in
+provisioning AP mode permanently — it never noticed the AP return, and only a
+reset recovered it, which is exactly what REQ-NF-005 forbids. After the fix, a
+**45 s** outage recovers on its own with no reset.
+
+## Standing hardware note — IMU ground
+
+The Freenove ESP32-S3 WROOM board exposes a single GND pin, which the RS-485
+module occupies. With the IMU's ground floating it is parasitically powered
+through SDA/SCL: it still ACKs its address at `0x69` on every scan, and register
+*writes* succeed, but *reads* fail — enough to look present while returning
+nothing. ST-001 and ST-007 therefore fail whenever that ground is not connected.
+Both pass with it connected, which is how REQ-F-001 was verified. A ground
+junction (the RS-485 module's second GND, or a breadboard rail) resolves it
+permanently.
 
 ---
 
 ## Definition of done (plan §7)
 
 - [x] All functional requirements pass acceptance — **12 of 12**
-- [x] All non-functional requirements pass acceptance — **7 of 8**, REQ-NF-005 blocked on router access
+- [x] All non-functional requirements pass acceptance — **8 of 8**
 - [x] CI pipeline green — run 34045246740: build, lint and test all pass
 - [x] README.md, ARCHITECTURE.md, ram_budget.md written
 - [x] All DESIGN.md files complete, with measured stack/heap values recorded in `docs/ram_budget.md`
-- [ ] Repository tagged `v1.0` — pending REQ-NF-005 only
+- [x] Repository tagged `v1.0`
 - [x] Demo: browser dashboard shows live telemetry from **all three** sources, 17 readings all `OK`
