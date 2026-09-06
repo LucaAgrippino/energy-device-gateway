@@ -20,7 +20,7 @@ component as each is implemented. The `health` component is now implemented and 
 2 skip / 0 fail, acceptance 18 of 20 PASS with 0 FAIL, on-target unit tests 20/20, and
 README.md, ARCHITECTURE.md, docs/ram_budget.md and docs/acceptance_results.md are written.
 Three defects that hardware testing exposed are fixed and tagged (`publisher-v1.1`,
-`aggregator-v1.1`, `wifi_manager-v1.1`). **Two requirements remain blocked:** REQ-F-006
+`aggregator-v1.1`, `wifi_manager-v1.1`). CI is green on `main` (run 34045246740: build, lint, test). **Two requirements remain blocked:** REQ-F-006
 (Modbus RTU, needs jumper wires) and REQ-NF-005 (Wi-Fi reconnect, needs the router taken
 down). `v1.0` is deliberately not tagged until both close.
 

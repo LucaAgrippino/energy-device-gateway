@@ -71,7 +71,7 @@ reboot.
 
 - [x] All functional requirements pass acceptance — **11 of 12**, REQ-F-006 blocked on hardware
 - [x] All non-functional requirements pass acceptance — **7 of 8**, REQ-NF-005 blocked on router access
-- [ ] CI pipeline green — to be confirmed on push
+- [x] CI pipeline green — run 34045246740: build, lint and test all pass
 - [x] README.md, ARCHITECTURE.md, ram_budget.md written
 - [x] All DESIGN.md files complete, with measured stack/heap values recorded in `docs/ram_budget.md`
 - [ ] Repository tagged `v1.0` — pending the two blocked items
