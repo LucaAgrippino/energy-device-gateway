@@ -32,17 +32,25 @@ record("Dashboard served at /",
 # --- Multi-client: 4 clients must see the same snapshot ---
 clients = [WsClient(HOST) for _ in range(4)]
 try:
-    # Line the clients up on a common snapshot: read one frame each, then read
-    # the next, which all four must agree on.
+    # Clients are opened sequentially, so a broadcast can land between two
+    # connections and leave them one frame apart. Comparing "the Nth frame each
+    # client read" therefore races. The property that actually matters is that
+    # every client receives the same snapshots, so collect several from each and
+    # require a common one.
+    seen = []
+    counts = set()
     for c in clients:
-        c.recv_json()
-    seen = [c.recv_json()[1]["ts"] for c in clients]
-    same = len(set(seen)) == 1
-    counts = {len(c.recv_json()[1]["readings"]) for c in clients}
+        tss = set()
+        for _ in range(4):
+            _, data = c.recv_json()
+            tss.add(data["ts"])
+            counts.add(len(data["readings"]))
+        seen.append(tss)
+    shared = set.intersection(*seen)
     record("Multi-client broadcast",
-           same and counts == {17},
-           f"4 concurrent clients, snapshot ts values {sorted(set(seen))}, "
-           f"reading counts {counts}")
+           len(shared) >= 2 and counts == {17},
+           f"4 concurrent clients x 4 frames: {len(shared)} snapshot(s) received "
+           f"identically by all four, reading counts {counts}")
 finally:
     for c in clients:
         c.close()
